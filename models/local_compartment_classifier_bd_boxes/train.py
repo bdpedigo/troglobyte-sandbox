@@ -16,111 +16,29 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import QuantileTransformer
 from skops.io import dump
 
-from troglobyte.features import CAVEWrangler
-
 client = cc.CAVEclient("minnie65_phase3_v1")
 
-# %%
+out_path = Path("./troglobyte-sandbox/models/")
 
+model_name = "local_compartment_classifier_bd_boxes"
 
 data_path = Path("./troglobyte-sandbox/data/bounding_box_labels")
 
 files = list(data_path.glob("*.csv"))
 
 # %%
-voxel_resolution = np.array([4, 4, 40])
+label_df = pd.read_csv(out_path / model_name / "labels.csv", index_col=[0, 1])
+label_df = label_df.rename(columns=lambda x: x.replace(".1", ""))
 
+# # %%
 
-def simple_labeler(label):
-    if "axon" in label:
-        return "axon"
-    elif "dendrite" in label:
-        return "dendrite"
-    elif "glia" in label:
-        return "glia"
-    elif "soma" in label:
-        return "soma"
-    else:
-        return np.nan
-
-
-def axon_labeler(label):
-    if label == "uncertain":
-        return np.nan
-    elif "axon" in label:
-        return True
-    else:
-        return False
-
-
-dfs = []
-for file in files:
-    file_label_df = pd.read_csv(file)
-
-    file_label_df.set_index(["bbox_id", "root_id"], inplace=True, drop=False)
-    file_label_df["ctr_pt_4x4x40"] = file_label_df["ctr_pt_4x4x40"].apply(
-        lambda x: np.array(eval(x.replace("  ", ",").replace(" ", ",")), dtype=int)
-    )
-
-    file_label_df["x_nm"] = (
-        file_label_df["ctr_pt_4x4x40"].apply(lambda x: x[0]) * voxel_resolution[0]
-    )
-    file_label_df["y_nm"] = (
-        file_label_df["ctr_pt_4x4x40"].apply(lambda x: x[1]) * voxel_resolution[1]
-    )
-    file_label_df["z_nm"] = (
-        file_label_df["ctr_pt_4x4x40"].apply(lambda x: x[2]) * voxel_resolution[2]
-    )
-
-    file_label_df["axon_label"] = file_label_df["label"].apply(axon_labeler)
-
-    file_label_df["simple_label"] = file_label_df["label"].apply(simple_labeler)
-
-    dfs.append(file_label_df)
-
-# %%
-label_df = pd.concat(dfs)
-
+# X_df = wrangler.features_.copy()
+# X_df = X_df.drop(columns=[col for col in X_df.columns if "rep_coord" in col])
 
 # %%
 
+X_df = pd.read_csv(out_path / model_name / "features.csv", index_col=[0, 1])
 
-points = label_df[["x_nm", "y_nm", "z_nm"]].values
-neighborhood_hops = 5
-
-# set up object
-wrangler = CAVEWrangler(client, verbose=10, n_jobs=-1)
-
-# list the objects we are interested in
-wrangler.set_objects(label_df.index.get_level_values("root_id"))
-
-# get a 20um bounding box around the points which were classified
-wrangler.set_query_boxes_from_points(points, box_width=20_000)
-
-# query the level2 ids for the objects in those bounding boxes
-wrangler.query_level2_ids()
-
-# query the level2 shape features for the objects in those bounding boxes
-wrangler.query_level2_shape_features()
-
-# query the level2 synapse features for the objects in those bounding boxes
-# this uses the object IDs which were input for the synapse query, which may get out
-# of date
-wrangler.query_level2_synapse_features(method="existing")
-
-# aggregate these features by k-hop neighborhoods in the level2 graph
-wrangler.aggregate_features_by_neighborhood(
-    aggregations=["mean", "std"],
-    neighborhood_hops=neighborhood_hops,
-    drop_self_in_neighborhood=True,
-)
-
-
-# %%
-
-X_df = wrangler.features_.copy()
-X_df = X_df.drop(columns=[col for col in X_df.columns if "rep_coord" in col])
-X_df
 
 # %%
 
@@ -199,7 +117,6 @@ def get_lda(n_classes):
 
 rf = RandomForestClassifier(n_estimators=500, max_depth=4)
 
-
 box_indices = np.arange(1, 4)
 
 rows = []
@@ -212,7 +129,7 @@ for fold, (train_box_indices, test_box_indices) in enumerate(
         )
         n_classes = label_df[label_column].nunique()
         models = {"rf": rf, "lda": get_lda(n_classes)}
-        for model_name, model in models.items():
+        for model_type, model in models.items():
             model.fit(train_X_df, train_l2_y)
             train_preds = model.predict(train_X_df)
             test_preds = model.predict(test_X_df)
@@ -223,7 +140,7 @@ for fold, (train_box_indices, test_box_indices) in enumerate(
             )
             rows.append(
                 {
-                    "model": model_name,
+                    "model": model_type,
                     "fold": fold,
                     "accuracy": train_report["accuracy"],
                     "macro_f1": train_report["macro avg"]["f1-score"],
@@ -237,7 +154,7 @@ for fold, (train_box_indices, test_box_indices) in enumerate(
             test_report = classification_report(test_l2_y, test_preds, output_dict=True)
             rows.append(
                 {
-                    "model": model_name,
+                    "model": model_type,
                     "fold": fold,
                     "accuracy": test_report["accuracy"],
                     "macro_f1": test_report["macro avg"]["f1-score"],
@@ -262,7 +179,7 @@ for fold, (train_box_indices, test_box_indices) in enumerate(
             )
             rows.append(
                 {
-                    "model": model_name + "-vote",
+                    "model": model_type + "-vote",
                     "fold": fold,
                     "accuracy": train_object_report["accuracy"],
                     "macro_f1": train_object_report["macro avg"]["f1-score"],
@@ -286,7 +203,7 @@ for fold, (train_box_indices, test_box_indices) in enumerate(
             )
             rows.append(
                 {
-                    "model": model_name + "-vote",
+                    "model": model_type + "-vote",
                     "fold": fold,
                     "accuracy": test_object_report["accuracy"],
                     "macro_f1": train_object_report["macro avg"]["f1-score"],
@@ -370,8 +287,6 @@ final_lda.fit(train_X_df, train_l2_y)
 
 # %%
 
-out_path = Path("./troglobyte-sandbox/models/")
-model_name = "local_compartment_classifier_bd_boxes"
 with open(out_path / model_name / f"{model_name}.skops", mode="bw") as f:
     dump(final_lda, file=f)
 
@@ -388,6 +303,8 @@ final_lda_no_syn = Pipeline(
 )
 
 final_lda_no_syn.fit(train_X_df_no_syn, train_l2_y)
+
+print(classification_report(train_l2_y, final_lda_no_syn.predict(train_X_df_no_syn)))
 
 with open(out_path / model_name / f"{model_name}_no_syn.skops", mode="bw") as f:
     dump(final_lda_no_syn, file=f)

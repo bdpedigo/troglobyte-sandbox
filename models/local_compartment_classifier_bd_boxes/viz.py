@@ -1,4 +1,7 @@
+# %%
 import json
+import pickle
+from pathlib import Path
 from typing import Optional, Union
 
 import caveclient as cc
@@ -7,14 +10,33 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 from nglui import statebuilder
+from skops.io import load
 
 from networkframe import NetworkFrame
 
+client = cc.CAVEclient("minnie65_phase3_v1")
+
+out_path = Path("./troglobyte-sandbox/models/")
+
+model_name = "local_compartment_classifier_bd_boxes"
+
+
 # %%
-y_pred = final_lda.predict(train_X_df)
+model = load(out_path / model_name / f"{model_name}.skops")
+
+# %%
+X_df = pd.read_csv(out_path / model_name / "features.csv", index_col=[0, 1])
+X_df = X_df.dropna()
+X_df = X_df[model.feature_names_in_]
+
+# %%
+y_pred = model.predict(X_df)
 
 # %%
 
+wrangler = pickle.load(open(out_path / model_name / "wrangler.pkl", "rb"))
+
+# %%
 
 # wrangler.query_level2_edges()
 edges_by_object = wrangler.object_level2_edges_
@@ -33,7 +55,7 @@ for object_id in edges_by_object.index.get_level_values("root_id")[:200]:
     temp_X = temp_X.drop(columns=[col for col in temp_X.columns if "rep_coord" in col])
     if temp_X.empty:
         continue
-    y_pred = pd.Series(final_lda.predict(temp_X), index=temp_X.index)
+    y_pred = pd.Series(model.predict(temp_X), index=temp_X.index)
     classification_by_object[object_id] = (
         y_pred.value_counts().sort_values(ascending=False).index[0]
     )
@@ -199,6 +221,22 @@ statebuilder.StateBuilder(base_state=state_dict, client=client).render_state(
 
 # %%
 
+bbox_df = pd.DataFrame(
+    {
+        "point_a": [
+            [170522, 219915, 20837],
+            [170519, 119908, 22837],
+            [343439, 120522, 18837],
+        ],
+        "point_b": [
+            [172022, 221415, 20987],
+            [172019, 121408, 22987],
+            [344939, 122022, 18987],
+        ],
+    }
+)
+
+#%%
 sbs = []
 dfs = []
 layers = []
@@ -243,10 +281,7 @@ annotation_layer = statebuilder.AnnotationLayerConfig(
     mapping_rules=bbox_mapper,
 )
 annotation_state = statebuilder.StateBuilder([annotation_layer], client=client)
-bboxes = [
-    eval(x.replace("array", "np.array")) for x in label_df["bbox_4x4x40"].unique()
-]
-bbox_df = pd.DataFrame(bboxes, columns=["point_a", "point_b"])
+
 dfs.append(bbox_df)
 sbs.append(annotation_state)
 
@@ -289,5 +324,3 @@ state_dict["layers"][1]["skeletonRendering"] = skel_rendering_kws
 statebuilder.StateBuilder(base_state=state_dict, client=client).render_state(
     return_as="html"
 )
-
-# %%

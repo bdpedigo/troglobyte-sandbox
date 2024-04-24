@@ -123,3 +123,4 @@ data/bounding_box_labels/bd_subvolume_segment_labels_bbox003.csv
 *.joblib
 *.pkl
 *.skops
+*.csv
