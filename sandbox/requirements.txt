@@ -1,0 +1,5 @@
+caveclient
+seaborn
+scikit-learn
+networkframe
+ipykernel
