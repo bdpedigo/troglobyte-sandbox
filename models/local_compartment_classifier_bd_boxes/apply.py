@@ -34,32 +34,25 @@ diff = end - start
 box = np.array([start, end])
 
 # %%
-# wrangler.set_query_box(box, source_resolution=np.array([4, 4, 40]))
-
 wrangler.query_objects_from_box(
     box, source_resolution=np.array([4, 4, 40]), size_threshold=200
 )
 
-# %%
-
+# define a larger bbox for looking at features
 new_start = start - diff
 new_end = end + diff
 new_box = np.array([new_start, new_end])
-
 wrangler.set_query_box(new_box, source_resolution=np.array([4, 4, 40]))
 
-# %%
 wrangler.query_level2_edges()
 
 wrangler.query_level2_shape_features()
 
 wrangler.query_level2_synapse_features()
 
-# %%
 wrangler.aggregate_features_by_neighborhood(
     aggregations=["mean", "std"], neighborhood_hops=5
 )
-
 
 # %%
 X_df = wrangler.features_
