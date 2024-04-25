@@ -311,7 +311,7 @@ from pathlib import Path
 from skops import card, hub_utils
 
 hub_out_path = Path(
-    "troglobyte-sandbox/models/local_compartment_classifier_bd_boxes/hub_model"
+    "troglobyte-sandbox/models/local_compartment_classifier_bd_boxes/hub"
 )
 if not hub_out_path.exists():
     hub_utils.init(

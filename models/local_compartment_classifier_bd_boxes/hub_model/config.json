@@ -1,0 +1,360 @@
+{
+    "sklearn": {
+        "columns": [
+            "area_nm2",
+            "max_dt_nm",
+            "mean_dt_nm",
+            "size_nm3",
+            "pca_unwrapped_0",
+            "pca_unwrapped_1",
+            "pca_unwrapped_2",
+            "pca_unwrapped_3",
+            "pca_unwrapped_4",
+            "pca_unwrapped_5",
+            "pca_unwrapped_6",
+            "pca_unwrapped_7",
+            "pca_unwrapped_8",
+            "pca_val_unwrapped_0",
+            "pca_val_unwrapped_1",
+            "pca_val_unwrapped_2",
+            "pca_ratio_01",
+            "pre_synapse_count",
+            "post_synapse_count",
+            "area_nm2_neighbor_mean",
+            "area_nm2_neighbor_std",
+            "max_dt_nm_neighbor_mean",
+            "max_dt_nm_neighbor_std",
+            "mean_dt_nm_neighbor_mean",
+            "mean_dt_nm_neighbor_std",
+            "size_nm3_neighbor_mean",
+            "size_nm3_neighbor_std",
+            "pca_unwrapped_0_neighbor_mean",
+            "pca_unwrapped_0_neighbor_std",
+            "pca_unwrapped_1_neighbor_mean",
+            "pca_unwrapped_1_neighbor_std",
+            "pca_unwrapped_2_neighbor_mean",
+            "pca_unwrapped_2_neighbor_std",
+            "pca_unwrapped_3_neighbor_mean",
+            "pca_unwrapped_3_neighbor_std",
+            "pca_unwrapped_4_neighbor_mean",
+            "pca_unwrapped_4_neighbor_std",
+            "pca_unwrapped_5_neighbor_mean",
+            "pca_unwrapped_5_neighbor_std",
+            "pca_unwrapped_6_neighbor_mean",
+            "pca_unwrapped_6_neighbor_std",
+            "pca_unwrapped_7_neighbor_mean",
+            "pca_unwrapped_7_neighbor_std",
+            "pca_unwrapped_8_neighbor_mean",
+            "pca_unwrapped_8_neighbor_std",
+            "pca_val_unwrapped_0_neighbor_mean",
+            "pca_val_unwrapped_0_neighbor_std",
+            "pca_val_unwrapped_1_neighbor_mean",
+            "pca_val_unwrapped_1_neighbor_std",
+            "pca_val_unwrapped_2_neighbor_mean",
+            "pca_val_unwrapped_2_neighbor_std",
+            "pca_ratio_01_neighbor_mean",
+            "pca_ratio_01_neighbor_std",
+            "pre_synapse_count_neighbor_mean",
+            "pre_synapse_count_neighbor_std",
+            "post_synapse_count_neighbor_mean",
+            "post_synapse_count_neighbor_std"
+        ],
+        "environment": [
+            "scikit-learn",
+            "caveclient"
+        ],
+        "example_input": {
+            "area_nm2": [
+                693824.0,
+                4852608.0,
+                17088896.0
+            ],
+            "area_nm2_neighbor_mean": [
+                10181485.714285716,
+                9884429.714285716,
+                9010409.142857144
+            ],
+            "area_nm2_neighbor_std": [
+                8312409.263207569,
+                8587259.418816902,
+                8418630.640116522
+            ],
+            "max_dt_nm": [
+                69.0,
+                543.0,
+                1287.0
+            ],
+            "max_dt_nm_neighbor_mean": [
+                664.7142857142857,
+                630.8571428571429,
+                577.7142857142857
+            ],
+            "max_dt_nm_neighbor_std": [
+                479.64240342658945,
+                504.9563358340017,
+                468.41868657651344
+            ],
+            "mean_dt_nm": [
+                24.4375,
+                156.5,
+                416.0
+            ],
+            "mean_dt_nm_neighbor_mean": [
+                198.62946428571428,
+                189.19642857142856,
+                170.66071428571428
+            ],
+            "mean_dt_nm_neighbor_std": [
+                150.614304054458,
+                157.4368957825056,
+                143.32375093543624
+            ],
+            "pca_ratio_01": [
+                1.3849340770961909,
+                1.181656878273399,
+                1.128046800200765
+            ],
+            "pca_ratio_01_neighbor_mean": [
+                1.8575624906424115,
+                1.8760422359899387,
+                1.880915879451087
+            ],
+            "pca_ratio_01_neighbor_std": [
+                0.641580757345606,
+                0.6228187048854344,
+                0.6165585104590592
+            ],
+            "pca_unwrapped_0": [
+                -0.0046539306640625,
+                -0.497314453125,
+                -0.258544921875
+            ],
+            "pca_unwrapped_0_neighbor_mean": [
+                0.039224624633789,
+                0.0840119448575106,
+                0.0623056238347833
+            ],
+            "pca_unwrapped_0_neighbor_std": [
+                0.3114910605258688,
+                0.2573427692683507,
+                0.296254177168357
+            ],
+            "pca_unwrapped_1": [
+                0.7392578125,
+                -0.11553955078125,
+                0.2169189453125
+            ],
+            "pca_unwrapped_1_neighbor_mean": [
+                0.0941687497225674,
+                0.1718776009299538,
+                0.1416541012850674
+            ],
+            "pca_unwrapped_1_neighbor_std": [
+                0.3179467337379631,
+                0.3628551035117971,
+                0.372447324946889
+            ],
+            "pca_unwrapped_2": [
+                -0.673828125,
+                -0.85986328125,
+                0.94140625
+            ],
+            "pca_unwrapped_2_neighbor_mean": [
+                0.2258744673295454,
+                0.2427867542613636,
+                0.0790349786931818
+            ],
+            "pca_unwrapped_2_neighbor_std": [
+                0.9134250264562896,
+                0.8928014788058292,
+                0.9167197839332804
+            ],
+            "pca_unwrapped_3": [
+                -0.0302886962890625,
+                -0.86572265625,
+                0.57177734375
+            ],
+            "pca_unwrapped_3_neighbor_mean": [
+                -0.2933238636363636,
+                -0.2173753218217329,
+                -0.3480571400035511
+            ],
+            "pca_unwrapped_3_neighbor_std": [
+                0.6203425764161097,
+                0.5938304683645145,
+                0.5600074530240728
+            ],
+            "pca_unwrapped_4": [
+                0.67333984375,
+                -0.0005474090576171,
+                0.81982421875
+            ],
+            "pca_unwrapped_4_neighbor_mean": [
+                0.2915762121027166,
+                0.3528386896306818,
+                0.2782594507390802
+            ],
+            "pca_unwrapped_4_neighbor_std": [
+                0.6415192812587974,
+                0.6430080201673403,
+                0.6308895861182334
+            ],
+            "pca_unwrapped_5": [
+                0.73876953125,
+                0.50048828125,
+                -0.03192138671875
+            ],
+            "pca_unwrapped_5_neighbor_mean": [
+                0.2028697620738636,
+                0.2245316938920454,
+                0.2729325727982954
+            ],
+            "pca_unwrapped_5_neighbor_std": [
+                0.265173781606759,
+                0.2994363858938455,
+                0.2968562365279343
+            ],
+            "pca_unwrapped_6": [
+                0.99951171875,
+                0.05828857421875,
+                -0.77880859375
+            ],
+            "pca_unwrapped_6_neighbor_mean": [
+                -0.2386505820534446,
+                -0.1530848416415128,
+                -0.0769850990988991
+            ],
+            "pca_unwrapped_6_neighbor_std": [
+                0.6776577717043619,
+                0.7717860533115238,
+                0.7447135522384378
+            ],
+            "pca_unwrapped_7": [
+                0.023834228515625,
+                -0.9931640625,
+                0.52978515625
+            ],
+            "pca_unwrapped_7_neighbor_mean": [
+                -0.4803272594105113,
+                -0.3878728693181818,
+                -0.5263227982954546
+            ],
+            "pca_unwrapped_7_neighbor_std": [
+                0.4799926318285017,
+                0.4691567465869561,
+                0.3891669942534205
+            ],
+            "pca_unwrapped_8": [
+                0.0192413330078125,
+                0.0997314453125,
+                -0.3359375
+            ],
+            "pca_unwrapped_8_neighbor_mean": [
+                -0.0384375832297585,
+                -0.0457548661665482,
+                -0.0061485984108664
+            ],
+            "pca_unwrapped_8_neighbor_std": [
+                0.3037878488292577,
+                0.3010843368506175,
+                0.2874409267860334
+            ],
+            "pca_val_unwrapped_0": [
+                15657.09765625,
+                40668.40625,
+                66863.0
+            ],
+            "pca_val_unwrapped_0_neighbor_mean": [
+                69378.52059659091,
+                67104.76526988637,
+                64723.43856534091
+            ],
+            "pca_val_unwrapped_0_neighbor_std": [
+                20242.245019019712,
+                24702.906417865197,
+                25959.16138296664
+            ],
+            "pca_val_unwrapped_1": [
+                11305.3017578125,
+                34416.42578125,
+                59273.25
+            ],
+            "pca_val_unwrapped_1_neighbor_mean": [
+                41190.40261008523,
+                39089.39133522727,
+                36829.68004261364
+            ],
+            "pca_val_unwrapped_1_neighbor_std": [
+                16625.870141811894,
+                18875.56976212627,
+                17666.778281657556
+            ],
+            "pca_val_unwrapped_2": [
+                1270.4095458984375,
+                13551.6748046875,
+                47764.625
+            ],
+            "pca_val_unwrapped_2_neighbor_mean": [
+                28717.50048828125,
+                27601.021828391335,
+                24490.75362881747
+            ],
+            "pca_val_unwrapped_2_neighbor_std": [
+                14988.204981576571,
+                16601.48080038032,
+                15622.078784778376
+            ],
+            "post_synapse_count": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "post_synapse_count_neighbor_mean": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "post_synapse_count_neighbor_std": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "pre_synapse_count": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "pre_synapse_count_neighbor_mean": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "pre_synapse_count_neighbor_std": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "size_nm3": [
+                12771840.0,
+                697943040.0,
+                7550330880.0
+            ],
+            "size_nm3_neighbor_mean": [
+                3233702034.285714,
+                3184761234.285714,
+                2695304960.0
+            ],
+            "size_nm3_neighbor_std": [
+                3650678969.7909584,
+                3691650923.5639486,
+                3518520747.0511127
+            ]
+        },
+        "model": {
+            "file": "local_compartment_classifier_bd_boxes.skops"
+        },
+        "model_format": "skops",
+        "task": "tabular-classification",
+        "use_intelex": false
+    }
+}
