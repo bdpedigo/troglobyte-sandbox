@@ -27,8 +27,15 @@ wrangler = CAVEWrangler(client=client, verbose=10, n_jobs=-1)
 start = np.array([263697, 279652, 21026])
 end = np.array([266513, 282468, 21314])
 
+# w-q box new box in white matter
+start = np.array([329598, 252614, 20496])
+end = np.array([304910, 281450, 23096])
 # start = np.array([140252, 231547, 21012])
 # end = np.array([143068, 234363, 21300])
+
+import pandas as pd
+
+object_ids = pd.read_csv("wq-ids.csv").columns.str.strip(' ').astype(int)
 
 diff = end - start
 box = np.array([start, end])
