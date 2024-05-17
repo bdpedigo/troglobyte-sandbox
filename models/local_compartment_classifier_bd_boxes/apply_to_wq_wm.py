@@ -203,8 +203,6 @@ oos_wrangler.stack_model_predict_proba("compartment_label", dropna=True)
 oos_wrangler.query_level2_networks()
 networks = oos_wrangler.object_level2_networks_
 
-# %%
-
 
 # %%
 
