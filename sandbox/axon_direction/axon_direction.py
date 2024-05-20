@@ -174,8 +174,8 @@ base_box = np.array([[492776, 922152, 993000], [502776, 932152, 1003000]])
 x_extent = base_box[1, 0] - base_box[0, 0]
 z_extent = base_box[1, 2] - base_box[0, 2]
 
-n_x = 5
-n_z = 5
+n_x = 10
+n_z = 10
 
 boxes = []
 box_names = []
@@ -189,12 +189,42 @@ for x_index in range(n_x):
         boxes.append(box)
         box_names.append("_".join(map(str, box.flatten())))
 
+
+# %%
+from nglui import statebuilder
+
+img_layer, seg_layer = statebuilder.from_client(client)
+
+box_mapper = statebuilder.BoundingBoxMapper(
+    point_column_a="point_a", point_column_b="point_b"
+)
+box_layer = statebuilder.AnnotationLayerConfig(
+    "boxes", mapping_rules=box_mapper, data_resolution=[8, 8, 40]
+)
+
+sb = statebuilder.StateBuilder([img_layer, seg_layer, box_layer])
+
+box_df = pd.DataFrame(
+    {
+        "point_a": [box[0] / np.array([8, 8, 40]) for box in boxes],
+        "point_b": [box[1] / np.array([8, 8, 40]) for box in boxes],
+    }
+)
+
+print(sb.render_state(box_df, return_as="url"))
+# %%
+
+import os
+
 OUT_PATH = Path("troglobyte-sandbox/results/axon_direction")
 
 recompute = False
 if recompute:
 
     def extract_features_for_box(box, retry=3):
+        bbox_name = "_".join(map(str, box.flatten()))
+        if os.path.exists(OUT_PATH / f"{bbox_name}_features.csv"):
+            return None
         try:
             wrangler = CAVEWrangler(client=client, n_jobs=1)
             wrangler.set_query_box(box)
@@ -211,8 +241,7 @@ if recompute:
             )
             wrangler.stack_model_predict_proba("bd_boxes")
             wrangler.stack_model_predict_proba("ej_skeletons")
-            bbox_name = "_".join(map(str, box.flatten()))
-            wrangler.features_.to_csv(f"{bbox_name}_features.csv")
+            wrangler.features_.to_csv(OUT_PATH / f"{bbox_name}_features.csv")
             return wrangler
         except:
             if retry > 0:
@@ -400,3 +429,132 @@ plotter.link_views()
 plotter.show()
 
 # %%
+
+plotter = pv.Plotter()
+n_x = 10
+n_z = 10
+
+feature = 'bd_boxes_predict_proba_dendrite'
+all_axon_features = pd.concat(box_features).dropna()
+
+is_axon_mask = all_axon_features[feature] > 0.8
+
+all_axon_features = all_axon_features[is_axon_mask].copy()
+
+sample_features = all_axon_features.sample(n=40_000)
+
+starts = sample_features[["rep_coord_x", "rep_coord_y", "rep_coord_z"]].values
+directions = sample_features[
+    ["pca_unwrapped_0", "pca_unwrapped_1", "pca_unwrapped_2"]
+].values
+
+scalars = np.abs(directions)
+scalars = np.repeat(scalars, 15, axis=0)
+
+actor = plotter.add_arrows(
+    starts,
+    directions,
+    mag=1000,
+    color="black",
+    opacity=0.3,
+    scalars=scalars,
+    rgb=True,
+)
+actor = plotter.add_arrows(
+    starts,
+    -directions,
+    mag=1000,
+    color="black",
+    opacity=0.3,
+    scalars=scalars,
+    rgb=True,
+)
+
+plot_odfs = True
+if plot_odfs:
+    for x_index in range(n_x):
+        for z_index in range(n_z):
+            features = box_features[x_index * n_z + z_index]
+            box = boxes[x_index * n_z + z_index]
+            box_mid = (box[0] + box[1]) / 2
+            if features is not None:
+                is_axon_mask = features[feature] > 0.8
+
+                axon_features = features[is_axon_mask].copy()
+
+                X = (
+                    axon_features[
+                        [
+                            "pca_unwrapped_0",
+                            "pca_unwrapped_1",
+                            "pca_unwrapped_2",
+                        ]
+                    ]
+                    .dropna()
+                    .values
+                )
+                X = np.concatenate((X, -X), axis=0)
+
+                odf = ODF(degree=8)
+                odf.fit(X)
+
+                sphere = make_sphere(3000)
+                odf_on_sphere = odf.to_sphere(sphere)
+                odf_on_sphere = odf_on_sphere * x_extent
+
+                faces = sphere.faces.copy()
+                new_faces = np.concatenate(
+                    (np.full(faces.shape[0], 3).reshape(-1, 1), faces), axis=1
+                )
+                new_vertices = sphere.vertices * odf_on_sphere[:, None]
+                # new_vertices += [x_index, 0, -z_index]
+                new_vertices += box_mid
+
+                odf_mesh = pv.PolyData(new_vertices, faces=new_faces)
+                odf_mesh["odf"] = odf_on_sphere
+                # plotter.add_mesh(
+                #     odf_mesh, scalars="odf", show_scalar_bar=False, show_vertices=False
+                # )
+                plotter.add_mesh(odf_mesh, scalars=np.abs(sphere.vertices), rgb=True)
+
+                # construct a mesh for the box
+                box_mesh = pv.Box(
+                    bounds=[
+                        box[0, 0],
+                        box[1, 0],
+                        box[0, 1],
+                        box[1, 1],
+                        box[0, 2],
+                        box[1, 2],
+                    ]
+                )
+                plotter.add_mesh(
+                    box_mesh,
+                    color=[0.7, 0.7, 0.7],
+                    line_width=0.1,
+                    style="wireframe",
+                )
+
+                # this adds points for the raw data
+                # points = pv.PointSet(x_extent / 2 * X + box_mid)
+                # plotter.add_mesh(points, point_size=1)
+
+                # this adds lines from the origin for the raw data
+                # new_X = X.copy()
+                # new_X = np.concatenate((np.array([0, 0, 0]).reshape(1, 3), new_X), axis=0)
+                # lines = np.concatenate(
+                #     [
+                #         np.full(len(X), 2).reshape(-1, 1),
+                #         np.full(len(X), 0).reshape(-1, 1),
+                #         np.arange(1, len(X) + 1)[:, None],
+                #     ],
+                #     axis=1,
+                # )
+                # plotter.add_mesh(
+                #     pv.PolyData(new_X, lines=lines),
+                #     color="black",
+                #     line_width=0.1,
+                # )
+
+plotter.show_axes()
+plotter.show()
