@@ -76,6 +76,10 @@ features[["bd_boxes_axon", "bd_boxes_soma", "bd_boxes_dendrite", "bd_boxes_glia"
 # %%
 (features["bd_boxes_dendrite"] > 0.9).mean()
 
+#%% 
+
+features[['bd_boxes_axon_neighbor_mean', 'bd_boxes_axon']].corr()
+
 # %%
 object_posteriors = features.groupby(["object_id"])[
     [
