@@ -37,7 +37,7 @@ label_df = label_df.rename(columns=lambda x: x.replace(".1", ""))
 
 # %%
 
-X_df = pd.read_csv(out_path / model_name / "features.csv", index_col=[0, 1])
+X_df = pd.read_csv(out_path / model_name / "features_new.csv", index_col=[0, 1])
 
 
 # %%
@@ -300,9 +300,9 @@ report_by_class.index.name = "class"
 report_by_class.reset_index(inplace=True)
 # %%
 
-model_pickle_file = out_path / model_name / f"{model_name}.skops"
-with open(model_pickle_file, mode="bw") as f:
-    dump(final_lda, file=f)
+# model_pickle_file = out_path / model_name / f"{model_name}.skops"
+# with open(model_pickle_file, mode="bw") as f:
+#     dump(final_lda, file=f)
 
 # %%
 import os

@@ -101,6 +101,10 @@ wrangler.query_level2_shape_features()
 # of date
 wrangler.query_level2_synapse_features(method="existing")
 
+wrangler.query_level2_edges(warn_on_missing=False)
+
+wrangler.query_level2_networks()
+
 # aggregate these features by k-hop neighborhoods in the level2 graph
 wrangler.aggregate_features_by_neighborhood(
     aggregations=["mean", "std"],
@@ -108,12 +112,14 @@ wrangler.aggregate_features_by_neighborhood(
     drop_self_in_neighborhood=True,
 )
 
-with open(out_path / model_name / "wrangler.pkl", mode="bw") as f:
+with open(out_path / model_name / "wrangler_new.pkl", mode="bw") as f:
     pickle.dump(wrangler, file=f)
 
 # %%
 
 X_df = wrangler.features_.copy()
 X_df = X_df.drop(columns=[col for col in X_df.columns if "rep_coord" in col])
-X_df.to_csv(out_path / model_name / "features.csv")
+X_df.to_csv(out_path / model_name / "features_new.csv")
 X_df
+
+# %%
