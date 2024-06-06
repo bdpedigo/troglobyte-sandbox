@@ -58,7 +58,7 @@ out_path = Path("troglobyte-sandbox/results/vasculature")
 
 pad_distance = 20_000
 
-for i in range(len(box_params)):
+for i in range(2, len(box_params)):
     lower = box_params.iloc[i][["x_min", "y_min", "z_min"]].values
     upper = box_params.iloc[i][["x_max", "y_max", "z_max"]].values
     og_box = np.array([lower, upper])
@@ -72,7 +72,7 @@ for i in range(len(box_params)):
     query_root_ids = (
         target_df.reset_index()
         .set_index(["X", "Y", "Z"])
-        .loc[box_params.index[0]]["root_id"]
+        .loc[box_params.index[i]]["root_id"]
     ).values
 
     currtime = time.time()
@@ -95,7 +95,29 @@ for i in range(len(box_params)):
 print(f"{time.time() - currtime:.3f} seconds elapsed.")
 
 # %%
-quit()
+import pickle
+
+with open(out_path / "wrangler_stash.pkl", "wb") as f:
+    wrangler.client = None
+    pickle.dump(wrangler, f)
+    wrangler.client = client
+
+# %%
+
+wrangler.query_level2_networks(validate=False)
+
+# %%
+from pcg_skel import pcg_skeleton_direct
+
+for object_id, nf in wrangler.object_level2_networks_.items():
+    nodes, edges = nf.to_simple_nodes_edges(
+        nodes_columns=["rep_coord_x", "rep_coord_y", "rep_coord_z"]
+    )
+    skel = pcg_skeleton_direct(nodes, edges)
+    break
+
+
+
 # %%
 features = wrangler.features_.dropna().copy()
 
