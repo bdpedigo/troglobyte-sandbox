@@ -20,7 +20,6 @@ wrangler_path = out_path / "wrangler_stash.pkl"
 
 wrangler: CAVEWrangler = pickle.load(open(wrangler_path, "rb"))
 wrangler.client = client
-wrangler.query_level2_networks()
 
 # %%
 
@@ -50,18 +49,197 @@ model = load(
 )
 
 # %%
-relevant_features = features[model.feature_names_in_].dropna()
-transformed = model.transform(relevant_features)
-pred_labels = model.predict(relevant_features)
-transformed = pd.DataFrame(
-    transformed, columns=["LDA1", "LDA2", "LDA3"], index=relevant_features.index
+
+
+def rich_transform(features, model):
+    relevant_features = features[model.feature_names_in_].dropna()
+    transformed = model.transform(relevant_features)
+    transformed = pd.DataFrame(
+        transformed, columns=["LDA1", "LDA2", "LDA3"], index=relevant_features.index
+    )
+
+    pred_labels = model.predict(relevant_features)
+    transformed["pred_label"] = pred_labels
+
+    posteriors = model.predict_proba(relevant_features)
+    transformed["max_posterior"] = posteriors.max(axis=1)
+
+    return transformed
+
+
+transformed = rich_transform(features, model)
+
+# %%
+import hvplot.pandas  # noqa
+
+import panel as pn
+
+
+pn.extension()
+
+
+fig = transformed.hvplot.scatter(
+    x="LDA1",
+    y="LDA2",
+    c="pred_label",
+    cmap="Category10",
+    alpha=0.1,
+    size=0.5,
+    legend="top",
+    height=500,
+    width=500,
+    hover=False,
+)
+pn.Row(fig, transformed.sample(10)).servable()
+
+
+# %%
+import holoviews as hv
+import pandas as pd
+from bokeh.plotting import show
+
+hv.extension("bokeh")
+
+macro = hv.Table(
+    transformed.reset_index(drop=True).sample(10_000),
+    kdims=["LDA1", "LDA2", "LDA3"],
+    vdims=["pred_label", "max_posterior"],
 )
 
-posteriors = model.predict_proba(relevant_features)
+scatter = macro.to.scatter("LDA1", "LDA2")
+#
+# hv.output(max_frames=1000)
 
-# from sklearn.ensemble import IsolationForest
-# outlier_model = IsolationForest(n_estimators=200)
+# show the plot
+scatter.opts(
+    width=450,
+    height=450,
+    color="pred_label",
+    cmap="Category10",
+    size=1,
+    tools=["hover"],
+    alpha=0.1,
+    show_legend=False,
+)
 
+show(hv.render(scatter))
+# %%
+scatter
+
+# %%
+
+
+# colors = sns.color_palette("pastel", n_colors=5).as_hex()
+# for i, (label, ids) in enumerate(object_predictions.groupby(object_predictions)):
+#     # ids = ids.sample(max(1, len(ids)))
+#     sub_df = ids.to_frame().reset_index()
+#     sub_df["color"] = colors[i]
+#     new_seg_layer = statebuilder.SegmentationLayerConfig(
+#         source=client.info.segmentation_source(),
+#         name=label,
+#         selected_ids_column=grouping,
+#         color_column="color",
+#         alpha_3d=0.3,
+#     )
+#     sbs.append(statebuilder.StateBuilder(layers=[new_seg_layer]))
+#     dfs.append(sub_df)
+
+# sb = statebuilder.ChainedStateBuilder(sbs)
+
+# sb.render_state(dfs, return_as="html")
+
+
+# %%
+from time import sleep
+
+import pandas as pd
+import panel as pn
+import seaborn as sns
+import thisnotthat as tnt
+from caveclient import CAVEclient
+from nglui import statebuilder
+from skops.io import load
+
+from troglobyte.features import CAVEWrangler
+
+pn.extension()
+
+df = transformed.reset_index()
+
+plot = tnt.BokehPlotPane(
+    df[["LDA1", "LDA3"]],
+    show_legend=False,
+    labels=df["pred_label"],
+    width=450,
+    height=450,
+    marker_size=0.01,
+    line_width=0,
+)
+
+data_view = tnt.SimpleDataPane(
+    df,
+)
+
+
+data_view.link(plot, selected="selected", bidirectional=True)
+
+
+# markdown = pn.pane.Markdown("Test.", width=100)
+html = pn.pane.HTML("<h1>Test</h1>", width=100)
+
+
+def update_markdown(event):
+    sleep(1)
+    html.object = f"Selected: {len(event.new)}"
+
+
+def render_ngl_link(event):
+    sbs = []
+    dfs = []
+    img_layer, seg_layer = statebuilder.helpers.from_client(client)
+    selected = event.new
+    selected_df = df.iloc[selected]
+    if len(selected_df) > 100:
+        selected_df = selected_df.sample(100)
+    l2_ids = selected_df["level2_id"].values
+    ids = client.chunkedgraph.get_roots(l2_ids, stop_layer=4)
+    seg_layer.add_selection_map(fixed_ids=ids)
+
+    sb = statebuilder.StateBuilder(layers=[img_layer, seg_layer])
+    html.object = sb.render_state(return_as="html")
+
+
+plot.param.watch(render_ngl_link, "selected")
+# text_input = pn.widgets.TextInput(value=markdown.object)
+# text_input.link(markdown, value="object")
+# new_panel.link(data_view)
+pn.Row(html, plot, data_view).servable()
+
+
+# %%
+import panel as pn
+from bokeh.models import ColumnDataSource
+from bokeh.plotting import figure
+
+pn.extension()
+
+palette = dict(
+    zip(transformed["pred_label"].unique(), sns.color_palette("tab10").as_hex())
+)
+
+transformed["mapped_colors"] = transformed["pred_label"].map(palette)
+source = ColumnDataSource(transformed.reset_index(drop=True))
+p = figure(width=400, height=400)
+p.scatter("LDA1", "LDA2", source=source, color="mapped_colors", size=0.1, alpha=0.1)
+p.axis.axis_label = None
+p.axis.visible = False
+p.grid.grid_line_color = None
+bokeh_pane = pn.pane.Bokeh(p)
+
+bokeh_pane
+
+
+# %%
 
 import matplotlib.patheffects as pe
 import matplotlib.pyplot as plt
@@ -91,6 +269,7 @@ og_pred_outliers = outlier_model.predict(og_transformed)
 pred_outliers = outlier_model.predict(transformed)
 
 
+# %%
 decision = model.decision_function(og_relevant_features)
 decision -= decision.min()
 og_decision_max = decision.max(axis=1)
@@ -301,7 +480,7 @@ sns.scatterplot(
 )
 axs[1].set_title("Novelty rating")
 
-#%%
+# %%
 
 
 # %%
