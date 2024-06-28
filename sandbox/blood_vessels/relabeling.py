@@ -50,6 +50,8 @@ model = load(
 
 # %%
 
+from sklearn.decomposition import PCA
+
 
 def rich_transform(features, model):
     relevant_features = features[model.feature_names_in_].dropna()
@@ -57,6 +59,10 @@ def rich_transform(features, model):
     transformed = pd.DataFrame(
         transformed, columns=["LDA1", "LDA2", "LDA3"], index=relevant_features.index
     )
+
+    pca_embed = PCA(n_components=2).fit_transform(transformed.values)
+    transformed["PCALDA1"] = pca_embed[:, 0]
+    transformed["PCALDA2"] = pca_embed[:, 1]
 
     pred_labels = model.predict(relevant_features)
     transformed["pred_label"] = pred_labels
@@ -75,85 +81,14 @@ import hvplot.pandas  # noqa
 import panel as pn
 
 
-pn.extension()
-
-
-fig = transformed.hvplot.scatter(
-    x="LDA1",
-    y="LDA2",
-    c="pred_label",
-    cmap="Category10",
-    alpha=0.1,
-    size=0.5,
-    legend="top",
-    height=500,
-    width=500,
-    hover=False,
-)
-pn.Row(fig, transformed.sample(10)).servable()
-
-
-# %%
 import holoviews as hv
 import pandas as pd
 from bokeh.plotting import show
 
-hv.extension("bokeh")
 
-macro = hv.Table(
-    transformed.reset_index(drop=True).sample(10_000),
-    kdims=["LDA1", "LDA2", "LDA3"],
-    vdims=["pred_label", "max_posterior"],
-)
-
-scatter = macro.to.scatter("LDA1", "LDA2")
-#
-# hv.output(max_frames=1000)
-
-# show the plot
-scatter.opts(
-    width=450,
-    height=450,
-    color="pred_label",
-    cmap="Category10",
-    size=1,
-    tools=["hover"],
-    alpha=0.1,
-    show_legend=False,
-)
-
-show(hv.render(scatter))
-# %%
-scatter
-
-# %%
-
-
-# colors = sns.color_palette("pastel", n_colors=5).as_hex()
-# for i, (label, ids) in enumerate(object_predictions.groupby(object_predictions)):
-#     # ids = ids.sample(max(1, len(ids)))
-#     sub_df = ids.to_frame().reset_index()
-#     sub_df["color"] = colors[i]
-#     new_seg_layer = statebuilder.SegmentationLayerConfig(
-#         source=client.info.segmentation_source(),
-#         name=label,
-#         selected_ids_column=grouping,
-#         color_column="color",
-#         alpha_3d=0.3,
-#     )
-#     sbs.append(statebuilder.StateBuilder(layers=[new_seg_layer]))
-#     dfs.append(sub_df)
-
-# sb = statebuilder.ChainedStateBuilder(sbs)
-
-# sb.render_state(dfs, return_as="html")
-
-
-# %%
 from time import sleep
 
 import pandas as pd
-import panel as pn
 import seaborn as sns
 import thisnotthat as tnt
 from caveclient import CAVEclient
@@ -167,7 +102,7 @@ pn.extension()
 df = transformed.reset_index()
 
 plot = tnt.BokehPlotPane(
-    df[["LDA1", "LDA3"]],
+    df[["LDA1", "LDA2"]],
     show_legend=False,
     labels=df["pred_label"],
     width=450,
@@ -180,9 +115,7 @@ data_view = tnt.SimpleDataPane(
     df,
 )
 
-
 data_view.link(plot, selected="selected", bidirectional=True)
-
 
 # markdown = pn.pane.Markdown("Test.", width=100)
 html = pn.pane.HTML("<h1>Test</h1>", width=100)
@@ -202,7 +135,7 @@ def render_ngl_link(event):
     if len(selected_df) > 100:
         selected_df = selected_df.sample(100)
     l2_ids = selected_df["level2_id"].values
-    ids = client.chunkedgraph.get_roots(l2_ids, stop_layer=4)
+    ids = client.chunkedgraph.get_roots(l2_ids, stop_layer=3)
     seg_layer.add_selection_map(fixed_ids=ids)
 
     sb = statebuilder.StateBuilder(layers=[img_layer, seg_layer])
@@ -642,3 +575,48 @@ plotter.show()
 
 # %%
 object_posteriors.idxmax(axis=1).value_counts()
+
+
+pn.extension()
+
+
+fig = transformed.hvplot.scatter(
+    x="LDA1",
+    y="LDA2",
+    c="pred_label",
+    cmap="Category10",
+    alpha=0.1,
+    size=0.5,
+    legend="top",
+    height=500,
+    width=500,
+    hover=False,
+)
+pn.Row(fig, transformed.sample(10)).servable()
+
+# %%
+hv.extension("bokeh")
+
+macro = hv.Table(
+    transformed.reset_index(drop=True).sample(10_000),
+    kdims=["LDA1", "LDA2", "LDA3"],
+    vdims=["pred_label", "max_posterior"],
+)
+
+scatter = macro.to.scatter("LDA1", "LDA2")
+#
+# hv.output(max_frames=1000)
+
+# show the plot
+scatter.opts(
+    width=450,
+    height=450,
+    color="pred_label",
+    cmap="Category10",
+    size=1,
+    tools=["hover"],
+    alpha=0.1,
+    show_legend=False,
+)
+
+show(hv.render(scatter))

@@ -20,7 +20,7 @@ wrangler_path = out_path / "wrangler_stash.pkl"
 
 wrangler: CAVEWrangler = pickle.load(open(wrangler_path, "rb"))
 wrangler.client = client
-wrangler.query_level2_networks()
+# wrangler.query_level2_networks()
 
 # %%
 

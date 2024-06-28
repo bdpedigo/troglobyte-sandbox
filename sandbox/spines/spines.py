@@ -167,10 +167,11 @@ for i, (root_id, mesh) in enumerate(meshes.items()):
     )
     network_poly = pv.PolyData(nodes[["x", "y", "z"]].values, lines=padded_lines)
     network_poly["length"] = nf.edges["length"].values
+    network_poly['dist_to_point'] = nf.nodes['dist_to_point'].values
 
     indices = np.unravel_index(i, shape)
     plotter.subplot(*indices)
-    plotter.add_mesh(network_poly, scalars="length")
+    plotter.add_mesh(network_poly, scalars="dist_to_point")
     point_poly = pv.PolyData(point)
     plotter.add_mesh(point_poly, color="red", point_size=10)
     classification = sample_target_labels.iloc[i]["tag"]
@@ -255,7 +256,6 @@ class EquivariantMPLayer(nn.Module):
         message_repr = torch.cat(
             (source_node_embed, target_node_embed, node_dist), dim=-1
         )
-        print(message_repr.shape)
         return self.message_mlp(message_repr)
 
     # def compute_distances(self, node_pos: Tensor, edge_index: LongTensor) -> Tensor:
