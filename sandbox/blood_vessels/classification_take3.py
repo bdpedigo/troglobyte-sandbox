@@ -1,4 +1,5 @@
 # %%
+import pickle
 import time
 from pathlib import Path
 
@@ -17,14 +18,10 @@ client.materialize.version = 943
 wrangler = CAVEWrangler(client=client, n_jobs=-1, verbose=3)
 
 # %%
-
-
-#%%
-target_df = (
-    pd.read_csv("troglobyte-sandbox/data/blood_vessels/segments_per_branch_bbox.csv")
-    .drop(columns="IDs")
-    .set_index("root_id")
-)
+df = pd.read_csv("troglobyte-sandbox/data/blood_vessels/segments_per_branch2.csv")
+target_df = df.set_index("IDs")
+target_df.index.name = "root_id"
+# target_df = target_df.sample(2)
 
 # %%
 box_params = target_df.groupby(["X", "Y", "Z"])[
@@ -60,7 +57,7 @@ out_path = Path("troglobyte-sandbox/results/vasculature")
 
 pad_distance = 20_000
 
-for i in range(2, len(box_params)):
+for i in range(0, len(box_params)):
     lower = box_params.iloc[i][["x_min", "y_min", "z_min"]].values
     upper = box_params.iloc[i][["x_max", "y_max", "z_max"]].values
     og_box = np.array([lower, upper])
@@ -94,6 +91,11 @@ for i in range(2, len(box_params)):
     features = wrangler.features_
     features.to_csv(out_path / f"vasculature_features_box={box_name}.csv")
 
+    with open(out_path / f"wrangler_box={box_name}.pkl", "wb") as f:
+        wrangler.client = None
+        pickle.dump(wrangler, f)
+        wrangler.client = client
+
 print(f"{time.time() - currtime:.3f} seconds elapsed.")
 
 # %%
@@ -117,7 +119,6 @@ for object_id, nf in wrangler.object_level2_networks_.items():
     )
     skel = pcg_skeleton_direct(nodes, edges)
     break
-
 
 
 # %%

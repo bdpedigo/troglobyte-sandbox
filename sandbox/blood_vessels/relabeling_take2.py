@@ -28,21 +28,16 @@ features = pd.read_csv(
     "troglobyte-sandbox/results/vasculature/vasculature_features_box=539648_578560_647680_559104_594944_678400.csv",
     index_col=[0, 1],
 )
-features = features[features.groupby("object_id").transform("size") > 1]
+# features = features[features.groupby("object_id").transform("size") > 1]
 
-object_posteriors = (
-    features.groupby(["object_id"])[
-        [
-            "bd_boxes_axon",
-            "bd_boxes_dendrite",
-            "bd_boxes_glia",
-            "bd_boxes_soma",
-        ]
-    ]
-    .mean()
-    .dropna()
+og_features = pd.read_csv(
+    "troglobyte-sandbox/models/local_compartment_classifier_bd_boxes/features.csv",
+    index_col=[0, 1],
 )
-
+og_labels = pd.read_csv(
+    "troglobyte-sandbox/models/local_compartment_classifier_bd_boxes/labels.csv",
+    index_col=[1],
+)["label"]
 
 # %%
 
@@ -74,20 +69,36 @@ def rich_transform(features, model):
 
 
 transformed = rich_transform(features, model)
+og_transformed = rich_transform(og_features, model)
+
+features = pd.concat([features, og_features])
+
+transformed["dataset"] = "new"
+og_transformed["dataset"] = "training"
+transformed = pd.concat([transformed, og_transformed])
+
+transformed["manual_label"] = transformed.index.get_level_values("object_id").map(
+    og_labels
+)
+
 
 # %%
 
 pn.extension()
 
-df = transformed.reset_index()
+df = transformed
 
+x = "LDA1"
+y = "LDA2"
+label = "pred_label"
+size = 0.01
 plot = tnt.BokehPlotPane(
-    df[["LDA1", "LDA2"]],
+    df[[x, y]],
     show_legend=False,
-    labels=df["pred_label"],
+    labels=df[label],
     width=450,
     height=450,
-    marker_size=0.01,
+    marker_size=size,
     line_width=0,
 )
 
@@ -110,9 +121,10 @@ def render_ngl_link(event):
     selected_df = df.iloc[selected]
     if len(selected_df) > 100:
         selected_df = selected_df.sample(100)
-    l2_ids = selected_df["level2_id"].values
-    ids = client.chunkedgraph.get_roots(l2_ids, stop_layer=4)
-    seg_layer.add_selection_map(fixed_ids=ids)
+    # l2_ids = selected_df["level2_id"].values
+    l2_ids = selected_df.index.get_level_values("level2_id").values
+    # ids = client.chunkedgraph.get_roots(l2_ids, stop_layer=4)
+    seg_layer.add_selection_map(fixed_ids=l2_ids)
 
     sb = statebuilder.StateBuilder(layers=[img_layer, seg_layer])
     html.object = sb.render_state(return_as="html")
@@ -147,11 +159,46 @@ text_input.param.watch(transfer_selection, "value")
 
 options = transformed["pred_label"].unique().tolist()
 options += ["other"]
+options += ["small"]
 select = pn.widgets.Select(name="Select new label", options=options)
 
-button = pn.widgets.Button(name="Apply new label")
 
-col2 = pn.Column(text_input, select, button)
+def record_labels(event):
+    new_label = select.value
+    selected = plot.selected
+    selected = df.index[selected]
+    df.loc[selected, "manual_label"] = new_label
+    print(df["manual_label"].notna().sum())
+
+
+relabel_button = pn.widgets.Button(name="Apply new label")
+relabel_button.on_click(record_labels)
+
+
+def retrain_model(event):
+    print("Retraining model...")
+    retrain_button.name = "Retraining..."
+    new_labels = df["manual_label"]
+    new_labels = new_labels.dropna()
+    new_features = features.loc[new_labels.index]
+    new_features = new_features[model.feature_names_in_].dropna()
+    new_labels = new_labels.loc[new_features.index]
+    model.fit(new_features, new_labels)
+    retrain_button.name = "Retrain model"
+    print("Model retrained.")
+
+    # transformed = rich_transform(new_features, model)
+    # new_df = transformed[[x, y, label, label]]
+    # new_df["size"] = size
+    # new_df.columns = plot.dataframe.columns
+    # plot.dataframe = new_df
+    plot.dataframe['x'] = 0
+
+
+retrain_button = pn.widgets.Button(name="Retrain model")
+retrain_button.on_click(retrain_model)
+
+col2 = pn.Column(text_input, select, relabel_button, retrain_button)
 row1 = pn.Row(plot, col2)
 row2 = pn.Row(html)
 layout = pn.Column(row1, row2)
