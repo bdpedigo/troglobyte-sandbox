@@ -55,7 +55,8 @@ model = load(
 
 out_path = Path("troglobyte-sandbox/results/vasculature")
 
-pad_distance = 20_000
+# pad_distance = 20_000
+pad_distance = 40_000
 
 for i in range(0, len(box_params)):
     lower = box_params.iloc[i][["x_min", "y_min", "z_min"]].values
@@ -80,6 +81,7 @@ for i in range(0, len(box_params)):
     wrangler.set_objects(query_root_ids)
     wrangler.set_query_box(padded_box)
     wrangler.query_level2_ids()
+
     wrangler.query_level2_shape_features()
     wrangler.query_level2_synapse_features(method="existing")
     wrangler.query_level2_edges(warn_on_missing=False)
@@ -97,6 +99,31 @@ for i in range(0, len(box_params)):
         wrangler.client = client
 
 print(f"{time.time() - currtime:.3f} seconds elapsed.")
+
+# %%
+i = 0
+query_root_ids = (
+    target_df.reset_index()
+    .set_index(["X", "Y", "Z"])
+    .loc[box_params.index[i]]["root_id"]
+).values
+box_params.iloc[i]
+# %%
+segmentation_resolution = np.asarray(client.chunkedgraph.base_resolution)
+
+box = box_params.iloc[i][["x_min", "y_min", "z_min", "x_max", "y_max", "z_max"]].values
+box = box.reshape((2, 3))
+box = box / segmentation_resolution
+box = box.astype(int)
+box = box.T
+
+
+client.chunkedgraph.get_leaves(
+    query_root_ids[0],
+    stop_layer=2,
+    bounds=box,
+)
+
 
 # %%
 import pickle
