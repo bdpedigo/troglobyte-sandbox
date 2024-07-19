@@ -13,18 +13,20 @@ from troglobyte.features import CAVEWrangler
 # %%
 
 client = CAVEclient("minnie65_phase3_v1")
-client.materialize.version = 943
+client.materialize.version = 1078
 
 wrangler = CAVEWrangler(client=client, n_jobs=-1, verbose=3)
 
 # %%
-df = pd.read_csv("troglobyte-sandbox/data/blood_vessels/segments_per_branch2.csv")
+df = pd.read_csv(
+    "troglobyte-sandbox/data/blood_vessels/segments_per_branch_2024-07-11.csv"
+)
 target_df = df.set_index("IDs")
 target_df.index.name = "root_id"
 # target_df = target_df.sample(2)
 
 # %%
-box_params = target_df.groupby(["X", "Y", "Z"])[
+box_params = target_df.groupby(["BranchX", "BranchY", "BranchZ"])[
     [
         "PointA_X",
         "PointA_Y",
@@ -35,6 +37,7 @@ box_params = target_df.groupby(["X", "Y", "Z"])[
         "mip_res_X",
         "mip_res_Y",
         "mip_res_Z",
+        "BranchTypeName",
     ]
 ].first()
 box_params["box_id"] = np.arange(len(box_params))
@@ -48,6 +51,11 @@ box_params["y_max"] = box_params["PointB_Y"] * box_params["mip_res_Y"]
 box_params["z_max"] = box_params["PointB_Z"] * box_params["mip_res_Z"]
 
 # %%
+box_params.set_index(["x_min", "y_min", "z_min", "x_max", "y_max", "z_max"])[
+    "BranchTypeName"
+]
+
+# %%
 
 model = load(
     "troglobyte-sandbox/models/local_compartment_classifier_bd_boxes/local_compartment_classifier_bd_boxes.skops"
@@ -56,9 +64,9 @@ model = load(
 out_path = Path("troglobyte-sandbox/results/vasculature")
 
 # pad_distance = 20_000
-pad_distance = 40_000
+pad_distance = 30_000
 
-for i in range(0, len(box_params)):
+for i in range(12, len(box_params)):
     lower = box_params.iloc[i][["x_min", "y_min", "z_min"]].values
     upper = box_params.iloc[i][["x_max", "y_max", "z_max"]].values
     og_box = np.array([lower, upper])
@@ -71,7 +79,7 @@ for i in range(0, len(box_params)):
 
     query_root_ids = (
         target_df.reset_index()
-        .set_index(["X", "Y", "Z"])
+        .set_index(["BranchX", "BranchY", "BranchZ"])
         .loc[box_params.index[i]]["root_id"]
     ).values
 
@@ -89,6 +97,7 @@ for i in range(0, len(box_params)):
     wrangler.aggregate_features_by_neighborhood(
         aggregations=["mean", "std"], neighborhood_hops=5
     )
+    wrangler.stack_model_predict_proba("bd_boxes")
 
     features = wrangler.features_
     features.to_csv(out_path / f"vasculature_features_box={box_name}.csv")
