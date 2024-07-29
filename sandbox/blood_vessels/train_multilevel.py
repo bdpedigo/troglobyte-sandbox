@@ -278,32 +278,125 @@ conf_mat
 
 # %%
 for filename in tqdm(glob.glob(str(feature_path / "vasculature_features_*.csv"))[:]):
+    print(filename)
     vasculature_feature_df = pd.read_csv(filename, index_col=[0, 1])
     vasculature_feature_df = vasculature_feature_df[columns]
     break
+
+box = filename.split("=")[1].split("_")
+box = [int(x.strip(".csv")) for x in box]
+box
+
+# %%
+box_name = "_".join([str(x) for x in box])
+
+# %%
+
+import pickle
+
+# for filename in tqdm(glob.glob(str(feature_path / "wrangler_*.pkl"))[:]):
+filename = feature_path / f"wrangler_box={box_name}.pkl"
+with open(filename, "rb") as f:
+    wrangler = pickle.load(f)
+    wrangler.client = client
+
+
+# %%
+lumen_segments = [
+    377858200361292074,
+    377862598407805983,
+    378421150314723072,
+    378984100268135823,
+    522910137985918230,
+]
+
+cv = client.info.segmentation_cloudvolume()
+
+lumen_meshes = cv.mesh.get(lumen_segments)
+
+# %%
+
+import pyvista as pv
+
+from neurovista import to_mesh_polydata
+
+plotter = pv.Plotter()
+
+bbox = np.array([[182528, 171776, 20160], [188416, 176384, 20544]])
+bbox = bbox * np.array([4, 4, 40])
+
+
+def bounds_to_pyvista(bounds: np.ndarray) -> list:
+    assert bounds.shape == (2, 3)
+    return [
+        bounds[0, 0],
+        bounds[1, 0],
+        bounds[0, 1],
+        bounds[1, 1],
+        bounds[0, 2],
+        bounds[1, 2],
+    ]
+
+
+bbox_pyvista = bounds_to_pyvista(bbox)
+bbox_mesh = pv.Box(bounds=bbox_pyvista)
+plotter.add_mesh(bbox_mesh, color="black", style="wireframe")
+
+padded_bbox_pyvista = bounds_to_pyvista(wrangler.query_box_)
+padded_bbox_mesh = pv.Box(bounds=padded_bbox_pyvista)
+plotter.add_mesh(padded_bbox_mesh, color="blue", style="wireframe")
+
+points = []
+polydatas = []
+for seg_id, mesh in lumen_meshes.items():
+    mesh_polydata = to_mesh_polydata(mesh.vertices, mesh.faces)
+    polydatas.append(mesh_polydata)
+
+joint_polydata = pv.MultiBlock(polydatas)
+joint_polydata = joint_polydata.extract_geometry()
+joint_polydata = joint_polydata.clean()
+joint_polydata = joint_polydata.decimate(0.90)
+# joint_polydata = joint_polydata.clip_box(bbox_pyvista, invert=False)
+joint_polydata = joint_polydata.extract_largest()
+
+plotter.add_mesh(joint_polydata, color="red", opacity=0.5)
+plotter.show()
+
+points = np.array(joint_polydata.points)
+# points = np.concatenate(points)
+
+# %%
+points.shape
+
+neighbors = NearestNeighbors(n_neighbors=1, n_jobs=-1)
+neighbors.fit(points)
 
 # %%
 new_positions = extract_positions(
     vasculature_feature_df.index.get_level_values("level2_id").unique()
 )
 
-neuron_dists = extract_neighbor_distances(neuron_nuc_neighbors, new_positions, label="neuron_nuc")
-nonneuron_dists = extract_neighbor_distances(nonneuron_nuc_neighbors, new_positions, label="nonneuron_nuc")
+neuron_dists = extract_neighbor_distances(
+    neuron_nuc_neighbors, new_positions, label="neuron_nuc"
+)
+nonneuron_dists = extract_neighbor_distances(
+    nonneuron_nuc_neighbors, new_positions, label="nonneuron_nuc"
+)
 
 vasculature_feature_df = vasculature_feature_df.join(neuron_dists)
 vasculature_feature_df = vasculature_feature_df.join(nonneuron_dists)
+vasculature_feature_df = vasculature_feature_df.join(new_positions)
 # %%
-vasculature_feature_df = vasculature_feature_df.dropna()[model.feature_names_in_]
-
+vasculature_X = vasculature_feature_df.dropna()[model.feature_names_in_]
 
 # %%
-vasculature_pred = model.predict(vasculature_feature_df)
+vasculature_pred = model.predict(vasculature_X)
 
-vasculature_X_transformed = model.transform(vasculature_feature_df)
+vasculature_X_transformed = model.transform(vasculature_X)
 
 # %%
 vasculature_X_transformed_df = pd.DataFrame(
-    data=vasculature_X_transformed, index=vasculature_feature_df.index
+    data=vasculature_X_transformed, index=vasculature_X.index
 )
 vasculature_X_transformed_df.columns = [
     f"LDA{i}" for i in range(vasculature_X_transformed_df.shape[1])
@@ -317,10 +410,19 @@ pg.add_legend(markerscale=20)
 
 # %%
 
-vasculature_pred_df = pd.DataFrame(
-    data=vasculature_pred, index=vasculature_feature_df.index, columns=["label"]
+dists, neighbor_indices = neighbors.kneighbors(
+    vasculature_feature_df[["x", "y", "z"]].values, return_distance=True
 )
 
+vasculature_feature_df["lumen_min_dist"] = dists
+
+# %%
+
+
+vasculature_pred_df = pd.DataFrame(
+    data=vasculature_pred, index=vasculature_X.index, columns=["label"]
+)
+vasculature_pred_df["lumen_min_dist"] = vasculature_feature_df["lumen_min_dist"]
 
 level2_counts_by_root = vasculature_pred_df.groupby("object_id").size()
 big_roots = level2_counts_by_root[level2_counts_by_root > 5].index
@@ -330,7 +432,7 @@ sub_vasculature_index = (
     big_vasculature_pred_df.index.get_level_values("object_id")
     .unique()
     .to_series()
-    .sample(1000)
+    .sample(100)
 )
 sub_vasculature_pred_df = vasculature_pred_df.loc[sub_vasculature_index]
 
@@ -353,6 +455,82 @@ for level in range(3, max_level + 1):
 # %%
 sub_vasculature_pred_df = sub_vasculature_pred_df.reset_index()
 
+# %%
+
+level_names = [f"level{level}_id" for level in range(2, max_level + 1)]
+level_names += ["object_id"]
+
+mixed_level_df = []
+for level_name in level_names:
+    groupby = sub_vasculature_pred_df.groupby(level_name)
+    label_counts = groupby["label"].value_counts()
+    label_props = label_counts / label_counts.groupby(level_name).transform("sum")
+    label_counts = label_counts.unstack().fillna(0)
+    label_props = label_props.unstack().fillna(0)
+    label_props = label_props.rename(columns=lambda x: f"{x}_prop")
+    dists = groupby["lumen_min_dist"].min()
+
+    new_df = pd.concat([label_props, dists], axis=1)
+    new_df.index.name = "node_id"
+    new_df.index = new_df.index.astype("Int64")
+    if level_name == "object_id":
+        level_name = "root_id"
+    new_df["level"] = level_name
+    mixed_level_df.append(new_df.reset_index())
+
+mixed_level_df = pd.concat(mixed_level_df)
+# mixed_level_df.index = mixed_level_df.index.astype("int64")
+# %%
+
+
+import numpy as np
+from nglui.segmentprops import SegmentProperties
+
+seg_df = mixed_level_df.copy()
+# seg_df = seg_df.sample(20000)
+
+n_randoms = 3
+for i in range(n_randoms):
+    seg_df[f"random_{i}"] = np.random.uniform(0, 1, size=len(seg_df))
+
+
+seg_prop = SegmentProperties.from_dataframe(
+    seg_df.reset_index().sample(20000),
+    id_col="node_id",
+    label_col="node_id",
+    tag_value_cols=["level"],
+    number_cols=[f"random_{i}" for i in range(n_randoms)]
+    + ["lumen_min_dist"]
+    + [f"{cl}_prop" for cl in model.classes_],
+)
+
+prop_id = client.state.upload_property_json(seg_prop.to_dict())
+prop_url = client.state.build_neuroglancer_url(
+    prop_id, format_properties=True, target_site="mainline"
+)
+
+from nglui import statebuilder
+
+client = CAVEclient("minnie65_public")
+client.materialize.version = 1078
+
+img = statebuilder.ImageLayerConfig(
+    source=client.info.image_source(),
+)
+seg = statebuilder.SegmentationLayerConfig(
+    source=client.info.segmentation_source(),
+    segment_properties=prop_url,
+    fixed_ids=lumen_segments,
+    active=True,
+)
+
+sb = statebuilder.StateBuilder(
+    layers=[img, seg],
+    target_site="mainline",
+    view_kws={"zoom_3d": 0.001, "zoom_image": 0.0000001},
+)
+
+sb.render_state()
 
 # %%
 current_level = max_level
