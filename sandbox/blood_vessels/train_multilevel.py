@@ -287,6 +287,7 @@ box = filename.split("=")[1].split("_")
 box = [int(x.strip(".csv")) for x in box]
 box
 
+
 # %%
 box_name = "_".join([str(x) for x in box])
 
@@ -352,17 +353,17 @@ for seg_id, mesh in lumen_meshes.items():
     mesh_polydata = to_mesh_polydata(mesh.vertices, mesh.faces)
     polydatas.append(mesh_polydata)
 
-joint_polydata = pv.MultiBlock(polydatas)
-joint_polydata = joint_polydata.extract_geometry()
-joint_polydata = joint_polydata.clean()
-joint_polydata = joint_polydata.decimate(0.90)
-# joint_polydata = joint_polydata.clip_box(bbox_pyvista, invert=False)
-joint_polydata = joint_polydata.extract_largest()
+lumen_polydata = pv.MultiBlock(polydatas)
+lumen_polydata = lumen_polydata.extract_geometry()
+lumen_polydata = lumen_polydata.clean()
+lumen_polydata = lumen_polydata.decimate(0.90)
+lumen_polydata = lumen_polydata.clip_box(bbox_pyvista, invert=False)
+lumen_polydata = lumen_polydata.extract_largest()
 
-plotter.add_mesh(joint_polydata, color="red", opacity=0.5)
+plotter.add_mesh(lumen_polydata, color="red", opacity=0.5)
 plotter.show()
 
-points = np.array(joint_polydata.points)
+points = np.array(lumen_polydata.points)
 # points = np.concatenate(points)
 
 # %%
@@ -386,6 +387,24 @@ nonneuron_dists = extract_neighbor_distances(
 vasculature_feature_df = vasculature_feature_df.join(neuron_dists)
 vasculature_feature_df = vasculature_feature_df.join(nonneuron_dists)
 vasculature_feature_df = vasculature_feature_df.join(new_positions)
+
+
+# %%
+
+xmin = bbox[0, 0]
+ymin = bbox[0, 1]
+zmin = bbox[0, 2]
+xmax = bbox[1, 0]
+ymax = bbox[1, 1]
+zmax = bbox[1, 2]
+
+truncate = True
+if truncate:
+    vasculature_feature_df = vasculature_feature_df.query(
+        "x >= @xmin & x <= @xmax & y >= @ymin & y <= @ymax & z >= @zmin & z <= @zmax"
+    )
+
+
 # %%
 vasculature_X = vasculature_feature_df.dropna()[model.feature_names_in_]
 
@@ -404,7 +423,7 @@ vasculature_X_transformed_df.columns = [
 vasculature_X_transformed_df["label"] = vasculature_pred
 
 pg = sns.PairGrid(vasculature_X_transformed_df, hue="label", corner=True)
-pg.map_lower(sns.scatterplot, alpha=0.05, linewidth=0, s=0.5)
+pg.map_lower(sns.scatterplot, alpha=0.2, linewidth=0, s=1)
 pg.map_diag(sns.histplot, kde=True)
 pg.add_legend(markerscale=20)
 
@@ -424,17 +443,15 @@ vasculature_pred_df = pd.DataFrame(
 )
 vasculature_pred_df["lumen_min_dist"] = vasculature_feature_df["lumen_min_dist"]
 
-level2_counts_by_root = vasculature_pred_df.groupby("object_id").size()
-big_roots = level2_counts_by_root[level2_counts_by_root > 5].index
-big_vasculature_pred_df = vasculature_pred_df.loc[big_roots]
+# level2_counts_by_root = vasculature_pred_df.groupby("object_id").size()
+# big_roots = level2_counts_by_root[level2_counts_by_root > 5].index
+# big_vasculature_pred_df = vasculature_pred_df.loc[big_roots]
 
 sub_vasculature_index = (
-    big_vasculature_pred_df.index.get_level_values("object_id")
-    .unique()
-    .to_series()
-    .sample(100)
+    vasculature_pred_df.index.get_level_values("object_id").unique().to_series()
+    # .sample(100)
 )
-sub_vasculature_pred_df = vasculature_pred_df.loc[sub_vasculature_index]
+sub_vasculature_pred_df = vasculature_pred_df.loc[sub_vasculature_index].copy()
 
 
 level2_ids = sub_vasculature_pred_df.index.get_level_values("level2_id")
@@ -446,7 +463,7 @@ timestamp = client.materialize.get_timestamp(client.materialize.version)
 # %%
 
 max_level = 6
-for level in range(3, max_level + 1):
+for level in range(4, max_level + 1):
     level_ids = client.chunkedgraph.get_roots(
         level2_ids, stop_layer=level, timestamp=timestamp
     )
@@ -457,7 +474,7 @@ sub_vasculature_pred_df = sub_vasculature_pred_df.reset_index()
 
 # %%
 
-level_names = [f"level{level}_id" for level in range(2, max_level + 1)]
+level_names = [f"level{level}_id" for level in range(4, max_level + 1)]
 level_names += ["object_id"]
 
 mixed_level_df = []
@@ -480,6 +497,8 @@ for level_name in level_names:
 
 mixed_level_df = pd.concat(mixed_level_df)
 # mixed_level_df.index = mixed_level_df.index.astype("int64")
+
+
 # %%
 
 
@@ -495,7 +514,7 @@ for i in range(n_randoms):
 
 
 seg_prop = SegmentProperties.from_dataframe(
-    seg_df.reset_index().sample(20000),
+    seg_df.reset_index(),
     id_col="node_id",
     label_col="node_id",
     tag_value_cols=["level"],
@@ -522,6 +541,7 @@ seg = statebuilder.SegmentationLayerConfig(
     segment_properties=prop_url,
     fixed_ids=lumen_segments,
     active=True,
+    skeleton_source="precomputed://middleauth+https://minnie.microns-daf.com/skeletoncache/api/v1/minnie65_phase3_v1/precomputed/skeleton",
 )
 
 sb = statebuilder.StateBuilder(
@@ -533,123 +553,219 @@ sb = statebuilder.StateBuilder(
 sb.render_state()
 
 # %%
-current_level = max_level
-current_df = sub_vasculature_pred_df
 
-labels_by_level = []
+level = 6
+query_df = mixed_level_df.query(f"level == 'level{level}_id' & axon_prop > 0.8")
 
-for current_level in range(max_level, 1, -1):
-    label_counts_at_level = current_df.groupby([f"level{current_level}_id"])[
-        "label"
-    ].nunique()
-    singletons = label_counts_at_level[label_counts_at_level == 1].index
-    new_labels = (
-        current_df.set_index(f"level{current_level}_id")
-        .loc[singletons]
-        .groupby([f"level{current_level}_id"])["label"]
-        .first()
+node_ids = query_df["node_id"].values
+# %%
+import time
+
+currtime = time.time()
+sample_meshes = cv.mesh.get(node_ids[:100], deduplicate_chunk_boundaries=False)
+print(f"{time.time() - currtime:.3f} seconds elapsed.")
+
+
+# %%
+def download_mesh_chunk(chunk_nodes):
+    return cv.mesh.get(
+        chunk_nodes, deduplicate_chunk_boundaries=False, allow_missing=True
     )
-    new_labels = new_labels.to_frame()
-    new_labels["level"] = current_level
-    new_labels.index = new_labels.index.astype("uint64")
-    labels_by_level.append(new_labels)
-    current_df = current_df.set_index(f"level{current_level}_id").drop(singletons)
-    break
+
+
+n_per_chunk = 50
+n_chunks = np.ceil(len(node_ids) / n_per_chunk).astype(int)
+chunked_node_ids = np.array_split(node_ids, n_chunks)
+
+
+currtime = time.time()
+axon_meshes = Parallel(n_jobs=-1, verbose=10)(
+    delayed(download_mesh_chunk)(chunk_nodes) for chunk_nodes in chunked_node_ids
+)
+print(f"{time.time() - currtime:.3f} seconds elapsed.")
+
 # %%
-labels_by_level = pd.concat(labels_by_level)
-labels_by_level.index.name = "node_id"
-# %%
-
-import numpy as np
-from nglui.segmentprops import SegmentProperties
-
-seg_df = labels_by_level.copy()
-# seg_df = seg_df.sample(20000)
-
-n_randoms = 3
-for i in range(n_randoms):
-    seg_df[f"random_{i}"] = np.random.uniform(0, 1, size=len(seg_df))
-
-seg_prop = SegmentProperties.from_dataframe(
-    seg_df.reset_index(),
-    id_col="node_id",
-    label_col="label",
-    tag_value_cols="label",
-    number_cols=[f"random_{i}" for i in range(n_randoms)],
-)
-
-prop_id = client.state.upload_property_json(seg_prop.to_dict())
-prop_url = client.state.build_neuroglancer_url(
-    prop_id, format_properties=True, target_site="mainline"
-)
-
-from nglui import statebuilder
-
-client = CAVEclient("minnie65_public")
-client.materialize.version = 1078
-
-img = statebuilder.ImageLayerConfig(
-    source=client.info.image_source(),
-)
-seg = statebuilder.SegmentationLayerConfig(
-    source=client.info.segmentation_source(),
-    segment_properties=prop_url,
-    fixed_ids=seg_df.index[0],
-    active=True,
-)
-
-sb = statebuilder.StateBuilder(
-    layers=[img, seg],
-    target_site="mainline",
-    view_kws={"zoom_3d": 0.001, "zoom_image": 0.0000001},
-)
-
-sb.render_state()
+all_meshes = {}
+for mesh_group in axon_meshes:
+    all_meshes.update(mesh_group)
 
 # %%
 
-model_0 = Pipeline(
-    [
-        ("transformer", QuantileTransformer(output_distribution="normal")),
-        ("lda", LinearDiscriminantAnalysis()),
-    ]
-)
+pv.set_jupyter_backend("client")
 
-hierarchical_labels = combined_labels_by_level2.to_frame().copy()
+bbox_mesh = pv.Box(bounds=bbox_pyvista)
 
-hierarchical_labels["0"] = hierarchical_labels["label"].apply(
-    lambda x: True if x in ["axon", "dendrite"] else False
-)
-hierarchical_labels["1"] = hierarchical_labels["label"].copy()
+polys = []
+for i, mesh in tqdm(enumerate(all_meshes.values()), total=len(all_meshes)):
+    if np.random.rand() < 0.2:
+        mesh_polydata = to_mesh_polydata(mesh.vertices, mesh.faces)
+        # mesh_polydata = mesh_polydata.clip_surface(bbox_mesh, invert=True)
+        # mesh_polydata = mesh_polydata.clean()
+        # if not mesh_polydata.is_all_triangles:
+        # mesh_polydata = mesh_polydata.triangulate()
+        # mesh_polydata = mesh_polydata.decimate(0.8)
+        color = np.random.rand(3)
+        color += 0.3
+        color /= color.max()
+        mesh_polydata["color"] = np.tile(color, (mesh_polydata.n_points, 1))
 
-y_train = hierarchical_labels.loc[train_inds]
-y_test = hierarchical_labels.loc[test_inds]
+        dists, _ = neighbors.kneighbors(mesh_polydata.points, return_distance=True)
+        mesh_polydata["lumen_min_dist"] = dists
 
-model_0.fit(X_train, y_train["0"])
-y_pred_train = model_0.predict(X_train)
+        polys.append(mesh_polydata)
 
-print("Train:")
-print(classification_report(y_train["0"], y_pred_train))
+# %%
+plotter = pv.Plotter()
 
+plotter.open_gif("axon_meshes.gif", fps=30)
+
+plotter.add_mesh(lumen_polydata, color="red", opacity=1)
+
+plotter.add_mesh(bbox_mesh, color="black", style="wireframe", line_width=4)
+
+joint_polydata = pv.MultiBlock(polys)
+joint_polydata = joint_polydata.extract_geometry()
+
+azimuth_step_size = 1
+n_steps = 1
+for thresh in tqdm(np.linspace(0, 10_000, 200)):
+    thresh_polydata = joint_polydata.threshold(
+        thresh, scalars="lumen_min_dist", invert=True
+    )
+    if thresh_polydata.n_points == 0:
+        continue
+    added_mesh = plotter.add_mesh(
+        thresh_polydata, scalars="color", opacity=0.7, rgb=True, smooth_shading=True
+    )
+    for i in range(n_steps):
+        plotter.camera.azimuth += azimuth_step_size
+        plotter.write_frame()
+    plotter.remove_actor(added_mesh)
+
+plotter.close()
+
+# plotter.show()
 
 # %%
 
-sub_labels = combined_labels_by_level2[
-    combined_labels_by_level2.isin(["soma", "perivascular"])
-]
-sub_labels = sub_labels[sub_labels.index.drop_duplicates()]
-sub_feature_df = combined_feature_df.loc[sub_labels.index]
-sub_feature_df = sub_feature_df.loc[sub_feature_df.index.drop_duplicates()]
+# # %%
+# current_level = max_level
+# current_df = sub_vasculature_pred_df
+
+# labels_by_level = []
+
+# for current_level in range(max_level, 1, -1):
+#     label_counts_at_level = current_df.groupby([f"level{current_level}_id"])[
+#         "label"
+#     ].nunique()
+#     singletons = label_counts_at_level[label_counts_at_level == 1].index
+#     new_labels = (
+#         current_df.set_index(f"level{current_level}_id")
+#         .loc[singletons]
+#         .groupby([f"level{current_level}_id"])["label"]
+#         .first()
+#     )
+#     new_labels = new_labels.to_frame()
+#     new_labels["level"] = current_level
+#     new_labels.index = new_labels.index.astype("uint64")
+#     labels_by_level.append(new_labels)
+#     current_df = current_df.set_index(f"level{current_level}_id").drop(singletons)
+#     break
+# # %%
+# labels_by_level = pd.concat(labels_by_level)
+# labels_by_level.index.name = "node_id"
+# # %%
+
+# import numpy as np
+# from nglui.segmentprops import SegmentProperties
+
+# seg_df = labels_by_level.copy()
+# # seg_df = seg_df.sample(20000)
+
+# n_randoms = 3
+# for i in range(n_randoms):
+#     seg_df[f"random_{i}"] = np.random.uniform(0, 1, size=len(seg_df))
+
+# seg_prop = SegmentProperties.from_dataframe(
+#     seg_df.reset_index(),
+#     id_col="node_id",
+#     label_col="label",
+#     tag_value_cols="label",
+#     number_cols=[f"random_{i}" for i in range(n_randoms)],
+# )
+
+# prop_id = client.state.upload_property_json(seg_prop.to_dict())
+# prop_url = client.state.build_neuroglancer_url(
+#     prop_id, format_properties=True, target_site="mainline"
+# )
+
+# from nglui import statebuilder
+
+# client = CAVEclient("minnie65_public")
+# client.materialize.version = 1078
+
+# img = statebuilder.ImageLayerConfig(
+#     source=client.info.image_source(),
+# )
+# seg = statebuilder.SegmentationLayerConfig(
+#     source=client.info.segmentation_source(),
+#     segment_properties=prop_url,
+#     fixed_ids=seg_df.index[0],
+#     active=True,
+# )
+
+# sb = statebuilder.StateBuilder(
+#     layers=[img, seg],
+#     target_site="mainline",
+#     view_kws={"zoom_3d": 0.001, "zoom_image": 0.0000001},
+# )
+
+# sb.render_state()
+
+# # %%
+
+# model_0 = Pipeline(
+#     [
+#         ("transformer", QuantileTransformer(output_distribution="normal")),
+#         ("lda", LinearDiscriminantAnalysis()),
+#     ]
+# )
+
+# hierarchical_labels = combined_labels_by_level2.to_frame().copy()
+
+# hierarchical_labels["0"] = hierarchical_labels["label"].apply(
+#     lambda x: True if x in ["axon", "dendrite"] else False
+# )
+# hierarchical_labels["1"] = hierarchical_labels["label"].copy()
+
+# y_train = hierarchical_labels.loc[train_inds]
+# y_test = hierarchical_labels.loc[test_inds]
+
+# model_0.fit(X_train, y_train["0"])
+# y_pred_train = model_0.predict(X_train)
+
+# print("Train:")
+# print(classification_report(y_train["0"], y_pred_train))
 
 
-# %%
-model_big = Pipeline(
-    [
-        ("transformer", QuantileTransformer(output_distribution="normal")),
-        ("lda", LinearDiscriminantAnalysis()),
-    ]
-)
+# # %%
 
-model_big.fit(sub_feature_df, sub_labels)
+# sub_labels = combined_labels_by_level2[
+#     combined_labels_by_level2.isin(["soma", "perivascular"])
+# ]
+# sub_labels = sub_labels[sub_labels.index.drop_duplicates()]
+# sub_feature_df = combined_feature_df.loc[sub_labels.index]
+# sub_feature_df = sub_feature_df.loc[sub_feature_df.index.drop_duplicates()]
 
-sub_labels_pred = model_big.predict(sub_feature_df)
+
+# # %%
+# model_big = Pipeline(
+#     [
+#         ("transformer", QuantileTransformer(output_distribution="normal")),
+#         ("lda", LinearDiscriminantAnalysis()),
+#     ]
+# )
+
+# model_big.fit(sub_feature_df, sub_labels)
+
+# sub_labels_pred = model_big.predict(sub_feature_df)
