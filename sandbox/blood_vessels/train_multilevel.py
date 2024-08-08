@@ -42,6 +42,9 @@ labels_by_level2 = (
 
 feature_df["label"] = labels_by_level2
 
+# drop the previous soma labels
+feature_df = feature_df.query("label != 'soma'")
+
 # %%
 
 data_path = Path("troglobyte-sandbox/data/blood_vessels")
@@ -49,12 +52,31 @@ data_path = Path("troglobyte-sandbox/data/blood_vessels")
 new_features = []
 
 new_label_map = {
-    "perivascular": "bdp_perivasculature_clean_ids.csv",
-    "soma": "bdp_soma_clean_ids.csv",
+    "perivascular": [
+        "https://ngl.cave-explorer.org/#!middleauth+https://global.daf-apis.com/nglstate/api/v1/4890727126401024"
+    ],
+    "soma": [
+        "https://ngl.cave-explorer.org/#!middleauth+https://global.daf-apis.com/nglstate/api/v1/6074591643435008",
+        "https://ngl.cave-explorer.org/#!middleauth+https://global.daf-apis.com/nglstate/api/v1/6362053351571456",
+        "https://ngl.cave-explorer.org/#!middleauth+https://global.daf-apis.com/nglstate/api/v1/5716916632027136",
+        "https://ngl.cave-explorer.org/#!middleauth+https://global.daf-apis.com/nglstate/api/v1/5990023284391936",
+        "https://ngl.cave-explorer.org/#!middleauth+https://global.daf-apis.com/nglstate/api/v1/4696569841451008",
+        "https://ngl.cave-explorer.org/#!middleauth+https://global.daf-apis.com/nglstate/api/v1/5111429943263232",
+        "https://ngl.cave-explorer.org/#!middleauth+https://global.daf-apis.com/nglstate/api/v1/6091125539471360",
+        "https://ngl.cave-explorer.org/#!middleauth+https://global.daf-apis.com/nglstate/api/v1/4772943218343936",
+        "https://ngl.cave-explorer.org/#!middleauth+https://global.daf-apis.com/nglstate/api/v1/4534147331653632",
+    ],
 }
 
-for new_label, new_label_file in new_label_map.items():
-    new_segments = pd.read_csv(data_path / new_label_file, header=None).values.ravel()
+for new_label, new_label_links in new_label_map.items():
+    new_segments = []
+    for link in new_label_links:
+        state_id = int(link.split("/")[-1])
+        state = client.state.get_state_json(state_id)
+        segments = state["layers"][1]["segments"]
+        segments = np.array([int(seg) for seg in segments if seg[0] != "!"])
+        new_segments.extend(segments)
+
     new_segments = np.unique(new_segments)
 
     new_level2_ids = []
@@ -277,7 +299,7 @@ conf_mat
 
 
 # %%
-for filename in tqdm(glob.glob(str(feature_path / "vasculature_features_*.csv"))[:]):
+for filename in tqdm(glob.glob(str(feature_path / "vasculature_features_*.csv"))[0:]):
     print(filename)
     vasculature_feature_df = pd.read_csv(filename, index_col=[0, 1])
     vasculature_feature_df = vasculature_feature_df[columns]
@@ -409,7 +431,7 @@ if truncate:
 vasculature_X = vasculature_feature_df.dropna()[model.feature_names_in_]
 
 # %%
-vasculature_pred = model.predict(vasculature_X)
+vasculature_pred = model_rf.predict(vasculature_X)
 
 vasculature_X_transformed = model.transform(vasculature_X)
 
@@ -434,6 +456,105 @@ dists, neighbor_indices = neighbors.kneighbors(
 )
 
 vasculature_feature_df["lumen_min_dist"] = dists
+
+# %%
+Z = (
+    vasculature_X.join(
+        pd.Series(vasculature_pred, index=vasculature_X.index, name="label")
+    )
+    .query("label == 'perivascular'")
+    .drop(columns="label")
+)
+
+Z_trans = model.steps[0][1].transform(Z)
+
+import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
+
+pca = PCA(n_components=2)
+Z_pca = pca.fit_transform(Z_trans)
+
+for i in range(1):
+    plt.figure()
+    plt.scatter(Z_pca[:, i], Z_pca[:, i + 1])
+    plt.xlabel(f"PCA{i}")
+    plt.ylabel(f"PCA{i+1}")
+    plt.show()
+
+# %%
+Z[Z_pca[:, 0] > 0].index.get_level_values("level2_id").unique().to_series().to_list()
+
+# %%
+#
+test_ids = [
+    161933942906159894,
+    162144980419216158,
+    162215005566010214,
+    162215005633118223,
+    162215143004963270,
+    162285374310188083,
+    162285374377295890,
+    162285443029664462,
+    162285443096772609,
+    162285511749140826,
+    162285511749141221,
+    162285511749141225,
+    162285511749141267,
+    162285580468617611,
+    162285717907571494,
+    162355674334888585,
+    162355743054365400,
+    162355743054365405,
+    162355811773841897,
+    162355811773842144,
+    162355811773842154,
+    162355811773842158,
+    162355880493318840,
+    162355880493318847,
+    162355880493318853,
+    162355949212795670,
+    162356017932272331,
+    162356086651748906,
+    162356086718857223,
+    162425974359589458,
+    162426043079066094,
+    162426043079066312,
+    162426111798543017,
+    162426111798543024,
+    162426180518019743,
+    162426180518019765,
+    162426249237496467,
+    162426317956973260,
+    162496343103767209,
+    162496411823243953,
+    162496480542720574,
+    162496617981674147,
+    162496686701150858,
+    162566986725851908,
+    162567055445328551,
+    162637424189506119,
+    162707792933683836,
+]
+
+inds = Z.index.droplevel("object_id").get_indexer_for(test_ids)
+
+colors = np.array(len(Z_trans)*['black'])
+colors[inds] = "red"
+
+pca = PCA(n_components=10)
+Z_pca = pca.fit_transform(Z_trans)
+
+for i in range(9):
+    plt.figure()
+    sns.scatterplot(x=Z_pca[:, i], y=Z_pca[:, i + 1], hue=colors)
+    plt.xlabel(f"PCA{i}")
+    plt.ylabel(f"PCA{i+1}")
+    plt.show()
+
+
+# %%
+vasculature_X.index[Z_pca[:, 0] > 0]
+
 
 # %%
 
@@ -463,7 +584,8 @@ timestamp = client.materialize.get_timestamp(client.materialize.version)
 # %%
 
 max_level = 6
-for level in range(4, max_level + 1):
+min_level = 3
+for level in range(min_level, max_level + 1):
     level_ids = client.chunkedgraph.get_roots(
         level2_ids, stop_layer=level, timestamp=timestamp
     )
@@ -474,7 +596,7 @@ sub_vasculature_pred_df = sub_vasculature_pred_df.reset_index()
 
 # %%
 
-level_names = [f"level{level}_id" for level in range(4, max_level + 1)]
+level_names = [f"level{level}_id" for level in range(min_level, max_level + 1)]
 level_names += ["object_id"]
 
 mixed_level_df = []
