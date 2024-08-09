@@ -175,13 +175,13 @@ min_dist = 0.7
 
 umap = UMAP(n_neighbors=n_neighbors, min_dist=min_dist)
 
-X_umap = umap.fit_transform(X.sample(100_000))
+X_umap = umap.fit_transform(X)
 X_umap = pd.DataFrame(X_umap, columns=["UMAP1", "UMAP2"])
 
 # %%
 pg = sns.PairGrid(X_umap, corner=True)
 
-pg.map_lower(sns.scatterplot, s=15, alpha=0.3)
+pg.map_lower(sns.scatterplot, s=0.5, alpha=0.01, linewidth=0)
 
 
 # %%
