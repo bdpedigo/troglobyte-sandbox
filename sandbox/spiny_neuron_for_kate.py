@@ -1,6 +1,7 @@
 # %%
 import pickle
 import time
+from typing import Literal, Union
 
 import numpy as np
 import pyvista as pv
@@ -9,7 +10,42 @@ from cloudvolume import Bbox
 from fast_simplification import simplify_mesh
 from tqdm.auto import tqdm
 
-from neurovista import center_camera, to_mesh_polydata
+UP_MAP = {
+    "x": (1, 0, 0),
+    "y": (0, 1, 0),
+    "z": (0, 0, 1),
+    "-x": (-1, 0, 0),
+    "-y": (0, -1, 0),
+    "-z": (0, 0, -1),
+}
+
+
+def center_camera(
+    plotter: pv.Plotter,
+    center: np.ndarray,
+    distance: float,
+    up: Literal["x", "y", "z", "-x", "-y", "-z"] = "-y",
+    elevation: Union[float, int] = 25,
+):
+    plotter.camera_position = "zx"
+    plotter.camera.focal_point = center
+    plotter.camera.position = center + np.array([0, 0, distance])
+    plotter.camera.up = UP_MAP[up]
+    plotter.camera.elevation = elevation
+
+
+def to_mesh_polydata(
+    nodes: np.ndarray,
+    faces: np.ndarray,
+):
+    points = nodes.astype(float)
+
+    faces = np.hstack([np.full((len(faces), 1), 3), faces])
+
+    poly = pv.PolyData(points, faces=faces)
+
+    return poly
+
 
 root_id = 864691135489514810
 
