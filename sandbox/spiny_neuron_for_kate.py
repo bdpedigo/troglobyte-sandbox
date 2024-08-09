@@ -64,7 +64,7 @@ nuc_loc = client.materialize.query_table(
 
 bbox = None
 split = False
-pull_mesh = True
+pull_mesh = False
 
 if pull_mesh:
     currtime = time.time()
@@ -147,6 +147,7 @@ for synapse_idx, sample_mesh in sample_meshes.items():
         [4, 4, 40]
     )
     sample_mesh_poly = to_mesh_polydata(sample_mesh.vertices, sample_mesh.faces)
+    sample_mesh_poly = simplify_mesh(sample_mesh_poly, target_reduction=0.9, agg=9)
     dists = pairwise_distances(sample_mesh_poly.points, synapse_position.reshape(1, -1))
     sample_mesh_poly["distances"] = dists
     sample_mesh_polys[synapse_idx] = sample_mesh_poly
@@ -167,6 +168,7 @@ pv.set_jupyter_backend("trame")
 
 animate = True
 fps = 20
+pbr = False
 window_size = (3000, 1500)
 window_size = (1500, 750)
 if animate:
@@ -177,7 +179,7 @@ else:
 
 # plotter.background_color = "black"
 
-plotter.add_mesh(mesh_poly, color="cyan")
+plotter.add_mesh(mesh_poly, color="cyan", pbr=pbr)
 
 plotter.add_points(
     point_poly,
@@ -219,6 +221,7 @@ if animate:
                 actor = plotter.add_mesh(
                     thresh_mesh,
                     color=synapse_df.loc[synapse_idx]["color"],
+                    pbr=pbr,
                 )
                 actors.append(actor)
 
@@ -230,3 +233,5 @@ if animate:
     plotter.close()
 else:
     plotter.show()
+
+# %%
