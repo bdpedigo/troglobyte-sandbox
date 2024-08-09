@@ -5,9 +5,10 @@ from typing import Literal, Union
 
 import numpy as np
 import pyvista as pv
+import seaborn as sns
 from caveclient import CAVEclient
-from cloudvolume import Bbox
 from fast_simplification import simplify_mesh
+from sklearn.metrics import pairwise_distances
 from tqdm.auto import tqdm
 
 UP_MAP = {
@@ -58,18 +59,6 @@ cv = client.info.segmentation_cloudvolume()
 nuc_loc = client.materialize.query_table(
     "nucleus_detection_v0", filter_equal_dict={"pt_root_id": root_id}
 ).iloc[0]["pt_position"] * np.array([4, 4, 40])
-
-box_width = 200_000
-
-bbox = np.array(
-    [
-        nuc_loc - box_width,
-        nuc_loc + box_width,
-    ]
-)
-bbox = bbox / np.array([8, 8, 40])
-bbox = bbox.astype(int)
-bbox = Bbox(bbox[0], bbox[1])
 
 # %%
 
@@ -123,7 +112,6 @@ synapse_df["pre_pt_position_y"] = synapse_df["pre_pt_position"].apply(lambda x: 
 synapse_df["pre_pt_position_z"] = synapse_df["pre_pt_position"].apply(lambda x: x[2])
 
 # TODO can assign colors to be whatever you want here
-import seaborn as sns
 
 colors = sns.husl_palette(n_colors=synapse_df.shape[0])
 np.random.shuffle(colors)
@@ -152,7 +140,6 @@ for i, row in sub_synapses.iterrows():
     sample_meshes[i] = mesh
 
 # %%
-from sklearn.metrics import pairwise_distances
 
 sample_mesh_polys = {}
 for synapse_idx, sample_mesh in sample_meshes.items():
@@ -243,5 +230,3 @@ if animate:
     plotter.close()
 else:
     plotter.show()
-
-# %%
