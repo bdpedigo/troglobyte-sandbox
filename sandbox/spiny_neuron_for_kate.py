@@ -233,5 +233,3 @@ if animate:
     plotter.close()
 else:
     plotter.show()
-
-# %%
