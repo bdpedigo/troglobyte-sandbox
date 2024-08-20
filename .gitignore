@@ -142,3 +142,5 @@ data/blood_vessels/Branches/Venule1_Order1.npz
 data/blood_vessels/Branches/Venule1_Order2.npz
 data/blood_vessels/Branches/Venule1_Order3.npz
 data/new_scheme/neuron_somas.txt
+data/*
+results/*

@@ -1,40 +1,45 @@
 # %%
+from pathlib import Path
+
 import gcsfs
 import numpy as np
+from joblib import Parallel, delayed
+from tqdm_joblib import tqdm_joblib
 
 from connectomics.segclr import reader
 
 # from connectomics.segclr.classification import model_handler
 
-# had to install tensorflow-probability, tf-keras
+# # had to install tensorflow-probability, tf-keras, scipy 1.10, edward from hash git+https://github.com/google/edward2.git@1abb22e
+
 
 # model, configs = model_handler.load_model(
-#     "gs://iarpa_microns/minnie/minnie65/embedding_classification/models/subcompartment_10um_BERT_SNGP_20220819"
+#     "gs://iarpa_microns/minnie/minnie65/embedding_classification/models/subcompartment_0um_BERT_SNGP_20220819"
 # )
 
 # %%
 
 PUBLIC_GCSFS = gcsfs.GCSFileSystem(token="anon")
 
-test_id_from_prefix = dict(
-    h01=1014493630,
-    microns=864691135293126156,
-)
+# test_id_from_prefix = dict(
+#     h01=1014493630,
+#     microns=864691135293126156,
+# )
 
-for data_key in sorted(reader.DATA_URL_FROM_KEY_BYTEWIDTH64):
-    print(data_key)
-    embedding_reader = reader.get_reader(data_key, PUBLIC_GCSFS)
-    print("embedding_reader:", embedding_reader)
-    test_id = None
-    for id_prefix in test_id_from_prefix:
-        if data_key.startswith(id_prefix):
-            test_id = test_id_from_prefix[id_prefix]
-    print("test_id", test_id)
-    embeddings_from_xyz = embedding_reader[test_id]
-    print(f"Test {data_key} segment ID:", test_id)
-    print("#embedding rows:", len(embeddings_from_xyz))
-    print("example xyz->embedding tuple:", next(iter(embeddings_from_xyz.items())))
-    print()
+# for data_key in sorted(reader.DATA_URL_FROM_KEY_BYTEWIDTH64):
+#     print(data_key)
+#     embedding_reader = reader.get_reader(data_key, PUBLIC_GCSFS)
+#     print("embedding_reader:", embedding_reader)
+#     test_id = None
+#     for id_prefix in test_id_from_prefix:
+#         if data_key.startswith(id_prefix):
+#             test_id = test_id_from_prefix[id_prefix]
+#     print("test_id", test_id)
+#     embeddings_from_xyz = embedding_reader[test_id]
+#     print(f"Test {data_key} segment ID:", test_id)
+#     print("#embedding rows:", len(embeddings_from_xyz))
+#     print("example xyz->embedding tuple:", next(iter(embeddings_from_xyz.items())))
+#     print()
 
 # %%
 
@@ -86,25 +91,24 @@ box_params.set_index(["x_min", "y_min", "z_min", "x_max", "y_max", "z_max"])[
 
 
 # %%
-# pad_distance = 20_000
-pad_distance = 30_000
+pad_distance = 20_000
 
-for i in range(12, len(box_params)):
-    lower = box_params.iloc[i][["x_min", "y_min", "z_min"]].values
-    upper = box_params.iloc[i][["x_max", "y_max", "z_max"]].values
-    og_box = np.array([lower, upper])
+i = 0
+lower = box_params.iloc[i][["x_min", "y_min", "z_min"]].values
+upper = box_params.iloc[i][["x_max", "y_max", "z_max"]].values
+og_box = np.array([lower, upper])
 
-    padded_box = og_box.copy()
-    padded_box[0] -= np.array(pad_distance)
-    padded_box[1] += np.array(pad_distance)
+padded_box = og_box.copy()
+padded_box[0] -= np.array(pad_distance)
+padded_box[1] += np.array(pad_distance)
 
-    box_name = str(og_box.astype(int).ravel()).strip("[]").replace(" ", "_")
+box_name = str(og_box.astype(int).ravel()).strip("[]").replace(" ", "_")
 
-    query_root_ids = (
-        target_df.reset_index()
-        .set_index(["BranchX", "BranchY", "BranchZ"])
-        .loc[box_params.index[i]]["root_id"]
-    ).values
+query_root_ids = (
+    target_df.reset_index()
+    .set_index(["BranchX", "BranchY", "BranchZ"])
+    .loc[box_params.index[i]]["root_id"]
+).values
 
 # %%
 timestamp_343 = client.materialize.get_timestamp(343)
@@ -122,137 +126,118 @@ for current_id, past_ids in past_id_map.items():
 
 # %%
 
-padded_box_cg = (padded_box / np.array([8, 8, 40])).astype(int)
-
-
-def get_n_leaves_for_root(root_id):
-    root_infos = []
-    past_ids = past_id_map[root_id]
-    for past_id in past_ids:
-        n_leaves = len(client.chunkedgraph.get_leaves(past_id, bounds=padded_box_cg.T))
-        root_infos.append(
-            {"root_id": root_id, "past_root_id": past_id, "n_leaves": n_leaves}
-        )
-    return root_infos
-
-
-from joblib import Parallel, delayed
-from tqdm_joblib import tqdm_joblib
-
-with tqdm_joblib(desc="Getting n_leaves", total=len(query_root_ids)):
-    root_infos = Parallel(n_jobs=-1)(
-        delayed(get_n_leaves_for_root)(root_id) for root_id in query_root_ids
-    )
-# collapse into one list
-root_infos = [item for sublist in root_infos for item in sublist]
-
 
 # %%
 import seaborn as sns
 
-root_info = pd.DataFrame(root_infos)
+# %%
 sns.histplot(data=root_info.groupby("root_id").sum(), x="n_leaves", log_scale=True)
 
-
-# %%
-for current_id, past_ids in past_id_map.items():
-    if 864691133041929973 in past_ids:
-        print(current_id)
-        break
-
-past_id_map[864691133041929973]
-
-# %%
-client.chunkedgraph.get_past_ids([864691136195393868], timestamp_past=timestamp_343)
-
-# %%
-client.chunkedgraph.get_past_ids([864691134885087643], timestamp_past=timestamp_343)
 
 # %%
 
 embedding_reader = reader.get_reader("microns_v343", PUBLIC_GCSFS)
 
 # %%
-big_past_root_ids = (
-    root_info.groupby("past_root_id")["n_leaves"]
-    .sum()
-    .to_frame()
-    .query("n_leaves > 20")
-    .index
-)
 
 
-def get_embeddings_for_past_id(past_id):
-    root_id = forward_id_map[past_id]
-    try:
-        out = embedding_reader[past_id]
-        new_out = {}
-        for xyz, embedding_vector in out.items():
-            new_out[(root_id, past_id, *xyz)] = embedding_vector
-        return new_out
-    except Exception:
-        return {}
+# %%
 
 
-# found_past_ids = []
-# embeddings_dict = {}
-# for past_id in tqdm(big_past_root_ids[:200]):
-#     root_id = forward_id_map[past_id]
-#     try:
-#         out = embedding_reader[past_id]
-#         new_out = {}
-#         for xyz, embedding_vector in out.items():
-#             new_out[(root_id, past_id, *xyz)] = embedding_vector
-#         embeddings_dict.update(new_out)
-#         found_past_ids.append(past_id)
-#     except Exception:
-#         continue
+out_path = Path("troglobyte-sandbox/results/vasculature/segclr")
+pull_embeddings = False
+threshold = 10
+if pull_embeddings:
+    padded_box_cg = (padded_box / np.array([8, 8, 40])).astype(int)
 
-with tqdm_joblib(desc="Getting embeddings", total=len(big_past_root_ids)):
-    embeddings_dicts = Parallel(n_jobs=-1)(
-        delayed(get_embeddings_for_past_id)(past_id) for past_id in big_past_root_ids
+    def get_n_leaves_for_root(root_id):
+        root_infos = []
+        past_ids = past_id_map[root_id]
+        for past_id in past_ids:
+            n_leaves = len(
+                client.chunkedgraph.get_leaves(past_id, bounds=padded_box_cg.T)
+            )
+            root_infos.append(
+                {"root_id": root_id, "past_root_id": past_id, "n_level2_ids": n_leaves}
+            )
+        return root_infos
+
+    with tqdm_joblib(desc="Getting n_leaves", total=len(query_root_ids)):
+        root_infos = Parallel(n_jobs=-1)(
+            delayed(get_n_leaves_for_root)(root_id) for root_id in query_root_ids
+        )
+    # collapse into one list
+    root_infos = [item for sublist in root_infos for item in sublist]
+    root_info = pd.DataFrame(root_infos)
+
+    out_path = Path("troglobyte-sandbox/results/vasculature/segclr")
+
+    root_info.to_csv(out_path / f"root_info_{box_name}.csv.gz")
+
+    big_past_root_ids = (
+        root_info.groupby("past_root_id")["n_leaves"]
+        .sum()
+        .to_frame()
+        .query(f"n_leaves >= {threshold}")
+        .index
     )
 
-# %%
-embeddings_dict = {}
-for d in embeddings_dicts:
-    embeddings_dict.update(d)
+    def get_embeddings_for_past_id(past_id):
+        root_id = forward_id_map[past_id]
+        try:
+            out = embedding_reader[past_id]
+            new_out = {}
+            for xyz, embedding_vector in out.items():
+                new_out[(root_id, past_id, *xyz)] = embedding_vector
+            return new_out
+        except Exception:
+            return {}
 
-# %%
-past_id_info = []
-for past_id in big_past_root_ids[:]:
-    shard = embedding_reader._sharder(past_id)
-    past_id_info.append({"past_id": past_id, "shard": shard})
+    with tqdm_joblib(desc="Getting embeddings", total=len(big_past_root_ids)):
+        embeddings_dicts = Parallel(n_jobs=-1)(
+            delayed(get_embeddings_for_past_id)(past_id)
+            for past_id in big_past_root_ids
+        )
 
-past_id_info = pd.DataFrame(past_id_info)
-sns.histplot(past_id_info["shard"].value_counts(), discrete=True)
+    embeddings_dict = {}
+    for d in embeddings_dicts:
+        embeddings_dict.update(d)
 
-# %%
-embedding_df = pd.DataFrame(embeddings_dict).T
-embedding_df.index.names = ["root_id", "past_id", "x", "y", "z"]
+    embedding_df = pd.DataFrame(embeddings_dict).T
+    embedding_df.index.names = ["root_id", "past_id", "x", "y", "z"]
 
-# %%
-embedding_df["x_nm"] = embedding_df.index.get_level_values("x") * 32
-embedding_df["y_nm"] = embedding_df.index.get_level_values("y") * 32
-embedding_df["z_nm"] = embedding_df.index.get_level_values("z") * 40
-mystery_offset = np.array([13824, 13824, 14816]) * np.array([8, 8, 40])
-embedding_df["x_nm"] += mystery_offset[0]
-embedding_df["y_nm"] += mystery_offset[1]
-embedding_df["z_nm"] += mystery_offset[2]
+    embedding_df["x_nm"] = embedding_df.index.get_level_values("x") * 32
+    embedding_df["y_nm"] = embedding_df.index.get_level_values("y") * 32
+    embedding_df["z_nm"] = embedding_df.index.get_level_values("z") * 40
+    mystery_offset = np.array([13824, 13824, 14816]) * np.array([8, 8, 40])
+    embedding_df["x_nm"] += mystery_offset[0]
+    embedding_df["y_nm"] += mystery_offset[1]
+    embedding_df["z_nm"] += mystery_offset[2]
 
-xmin = padded_box[0, 0]
-xmax = padded_box[1, 0]
-ymin = padded_box[0, 1]
-ymax = padded_box[1, 1]
-zmin = padded_box[0, 2]
-zmax = padded_box[1, 2]
+    xmin = padded_box[0, 0]
+    xmax = padded_box[1, 0]
+    ymin = padded_box[0, 1]
+    ymax = padded_box[1, 1]
+    zmin = padded_box[0, 2]
+    zmax = padded_box[1, 2]
 
-embedding_df = embedding_df.query(
-    "x_nm > @xmin and x_nm < @xmax and y_nm > @ymin and y_nm < @ymax and z_nm > @zmin and z_nm < @zmax"
-)
+    embedding_df = embedding_df.query(
+        "x_nm > @xmin and x_nm < @xmax and y_nm > @ymin and y_nm < @ymax and z_nm > @zmin and z_nm < @zmax"
+    )
+    embedding_df = embedding_df.droplevel(["x", "y", "z"])
+
+    embedding_df.to_csv(out_path / f"embedding_df_{box_name}.csv.gz")
+
+else:
+    embedding_df = pd.read_csv(
+        out_path / f"embedding_df_{box_name}.csv.gz", index_col=[0, 1]
+    )
+
 
 # %%
 import pyvista as pv
+
+pv.set_jupyter_backend("client")
 
 plotter = pv.Plotter()
 points = embedding_df[["x_nm", "y_nm", "z_nm"]].values
@@ -271,17 +256,118 @@ def bounds_to_pyvista(bounds: np.ndarray) -> list:
         bounds[1, 2],
     ]
 
+
 og_box_poly = pv.Box(bounds=bounds_to_pyvista(og_box))
 padded_box_poly = pv.Box(bounds=bounds_to_pyvista(padded_box))
 
 plotter.add_mesh(og_box_poly, color="black", style="wireframe")
 plotter.add_mesh(padded_box_poly, color="red", style="wireframe")
 
-
 plotter.show()
 
+# %%
+
+from umap import UMAP
+
+n_neighbors = 20
+min_dist = 0.3
+
+umap = UMAP(n_neighbors=n_neighbors, min_dist=min_dist)
+
+X = embedding_df.drop(columns=["x_nm", "y_nm", "z_nm"]).values
+X_umap = umap.fit_transform(X)
+X_umap = pd.DataFrame(X_umap, columns=["UMAP1", "UMAP2"])
+
+# %%
+import matplotlib.pyplot as plt
+
+fig, ax = plt.subplots()
+sns.scatterplot(data=X_umap, x="UMAP1", y="UMAP2", ax=ax, s=0.2, alpha=0.5, linewidth=0)
 
 
+# %%
+from neurovista import to_mesh_polydata
+
+cv = client.info.segmentation_cloudvolume()
+cv.cache.enabled = True
+
+X_umap_df = pd.DataFrame(
+    data=X_umap.values, columns=["UMAP1", "UMAP2"], index=embedding_df.index
+)
+# %%
+root_counts = embedding_df.groupby("root_id").size().sort_values(ascending=False)
+
+# %%
+test_root = root_counts.index[314]
+
+from cloudvolume import Bbox
+
+box = Bbox(*padded_box_cg.tolist())
+
+mesh = cv.mesh.get(test_root, bounding_box=box, deduplicate_chunk_boundaries=False)[
+    test_root
+]
+
+mesh_poly = to_mesh_polydata(mesh.vertices, mesh.faces)
+mesh_poly = (
+    mesh_poly.clip_surface(padded_box_poly, invert=True).clean().extract_largest()
+)
+# from fast_simplification import simplify_mesh
+
+# mesh_poly = simplify_mesh(mesh_poly, target_reduction=0.95, agg=9)
+
+plotter = pv.Plotter()
+plotter.add_mesh(mesh_poly, color="red")
+plotter.add_mesh(padded_box_poly, color="black", style="wireframe")
+plotter.show()
+
+fig, ax = plt.subplots(1, 1, figsize=(8, 8))
+sns.scatterplot(
+    data=X_umap_df,
+    x="UMAP1",
+    y="UMAP2",
+    ax=ax,
+    s=0.2,
+    alpha=0.5,
+    linewidth=0,
+    color="grey",
+)
+sns.scatterplot(
+    data=X_umap_df.loc[test_root],
+    x="UMAP1",
+    y="UMAP2",
+    ax=ax,
+    s=10,
+    alpha=1,
+    # linewidth=,
+    color="darkred",
+    zorder=10,
+)
+
+
+# %%
+
+import time
+
+from sklearn.neighbors import kneighbors_graph
+
+currtime = time.time()
+
+n_neighbors = 20
+adjacency = kneighbors_graph(points, n_neighbors=n_neighbors, n_jobs=-1)
+
+print(f"{time.time() - currtime:.3f} seconds elapsed.")
+
+# %%
+edges = np.nonzero(adjacency)
+
+lines = np.stack((np.full(len(edges[0]), 2), *edges)).T
+
+point_graph_poly = pv.PolyData(points, lines=lines)
+
+plotter = pv.Plotter()
+plotter.add_mesh(point_graph_poly, color="black", line_width=1)
+plotter.show()
 
 # %%
 cv = client.info.segmentation_cloudvolume()
@@ -346,26 +432,16 @@ plotter = pv.Plotter()
 points_moved2 = points + np.array([13824, 13824, 14816]) * np.array([8, 8, 40])
 plotter.add_mesh(points_moved2, color="green", point_size=10)
 
-
 plotter.add_mesh(test_mesh, color="red", opacity=0.5)
 
 plotter.show()
-
-# %%
-
-
-# %%
-
-
-# xyzs = sorted(embeddings)
-# embedding_array = np.array([embeddings[_] for _ in xyzs])
 
 
 # %%
 from sklearn.decomposition import PCA
 
-X = embedding_df.values
-n_components = 10
+X = embedding_df.drop(columns=["x_nm", "y_nm", "z_nm"]).values
+n_components = 4
 pca = PCA(n_components=n_components, whiten=True)
 
 X_pca = pca.fit_transform(X)
@@ -383,23 +459,30 @@ pg.map_lower(sns.scatterplot, s=15, alpha=0.3)
 # %%
 pg = sns.PairGrid(X_pca, corner=True)
 
-pg.map_lower(sns.scatterplot, s=15, alpha=0.3)
+pg.map_lower(sns.scatterplot, s=1, alpha=0.01, linewidth=0)
 
 
 # %%
 
-# n_neighbors = 20
-# min_dist = 0.3
+from umap import UMAP
 
-# umap = UMAP(n_neighbors=n_neighbors, min_dist=min_dist)
+n_neighbors = 20
+min_dist = 0.3
 
-# X_umap = umap.fit_transform(X)
-# X_umap = pd.DataFrame(X_umap, columns=["UMAP1", "UMAP2"])
+umap = UMAP(n_neighbors=n_neighbors, min_dist=min_dist)
+
+X_umap = umap.fit_transform(X)
+X_umap = pd.DataFrame(X_umap, columns=["UMAP1", "UMAP2"])
 
 # %%
-# pg = sns.PairGrid(X_umap, corner=True)
+pg = sns.PairGrid(X_umap, corner=True)
 
-# pg.map_lower(sns.scatterplot, linewidth=0)
+pg.map_lower(sns.scatterplot, linewidth=0)
 
+# %%
+import matplotlib.pyplot as plt
+
+fig, ax = plt.subplots()
+sns.scatterplot(data=X_umap, x="UMAP1", y="UMAP2", ax=ax, s=0.2, alpha=0.5, linewidth=0)
 
 # %%

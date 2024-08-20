@@ -538,7 +538,7 @@ test_ids = [
 
 inds = Z.index.droplevel("object_id").get_indexer_for(test_ids)
 
-colors = np.array(len(Z_trans)*['black'])
+colors = np.array(len(Z_trans) * ["black"])
 colors[inds] = "red"
 
 pca = PCA(n_components=10)
