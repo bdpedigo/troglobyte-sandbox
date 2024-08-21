@@ -3,6 +3,10 @@ from pathlib import Path
 
 import gcsfs
 import numpy as np
+import pandas as pd
+import seaborn as sns
+from caveclient import CAVEclient
+from fast_simplification import simplify_mesh
 from joblib import Parallel, delayed
 from tqdm_joblib import tqdm_joblib
 
@@ -21,31 +25,8 @@ from connectomics.segclr import reader
 
 PUBLIC_GCSFS = gcsfs.GCSFileSystem(token="anon")
 
-# test_id_from_prefix = dict(
-#     h01=1014493630,
-#     microns=864691135293126156,
-# )
-
-# for data_key in sorted(reader.DATA_URL_FROM_KEY_BYTEWIDTH64):
-#     print(data_key)
-#     embedding_reader = reader.get_reader(data_key, PUBLIC_GCSFS)
-#     print("embedding_reader:", embedding_reader)
-#     test_id = None
-#     for id_prefix in test_id_from_prefix:
-#         if data_key.startswith(id_prefix):
-#             test_id = test_id_from_prefix[id_prefix]
-#     print("test_id", test_id)
-#     embeddings_from_xyz = embedding_reader[test_id]
-#     print(f"Test {data_key} segment ID:", test_id)
-#     print("#embedding rows:", len(embeddings_from_xyz))
-#     print("example xyz->embedding tuple:", next(iter(embeddings_from_xyz.items())))
-#     print()
-
 # %%
 
-
-import pandas as pd
-from caveclient import CAVEclient
 
 client = CAVEclient("minnie65_phase3_v1")
 client.materialize.version = 1078
@@ -91,7 +72,7 @@ box_params.set_index(["x_min", "y_min", "z_min", "x_max", "y_max", "z_max"])[
 
 
 # %%
-pad_distance = 20_000
+pad_distance = 10_000  # 5um buffer
 
 i = 0
 lower = box_params.iloc[i][["x_min", "y_min", "z_min"]].values
@@ -126,29 +107,13 @@ for current_id, past_ids in past_id_map.items():
 
 # %%
 
-
-# %%
-import seaborn as sns
-
-# %%
-sns.histplot(data=root_info.groupby("root_id").sum(), x="n_leaves", log_scale=True)
-
-
-# %%
-
-embedding_reader = reader.get_reader("microns_v343", PUBLIC_GCSFS)
-
-# %%
-
-
-# %%
+padded_box_cg = (padded_box / np.array([8, 8, 40])).astype(int)
 
 
 out_path = Path("troglobyte-sandbox/results/vasculature/segclr")
 pull_embeddings = False
 threshold = 10
 if pull_embeddings:
-    padded_box_cg = (padded_box / np.array([8, 8, 40])).astype(int)
 
     def get_n_leaves_for_root(root_id):
         root_infos = []
@@ -181,6 +146,8 @@ if pull_embeddings:
         .query(f"n_leaves >= {threshold}")
         .index
     )
+
+    embedding_reader = reader.get_reader("microns_v343", PUBLIC_GCSFS)
 
     def get_embeddings_for_past_id(past_id):
         root_id = forward_id_map[past_id]
@@ -233,6 +200,20 @@ else:
         out_path / f"embedding_df_{box_name}.csv.gz", index_col=[0, 1]
     )
 
+xmin = padded_box[0, 0]
+xmax = padded_box[1, 0]
+ymin = padded_box[0, 1]
+ymax = padded_box[1, 1]
+zmin = padded_box[0, 2]
+zmax = padded_box[1, 2]
+
+embedding_df = embedding_df.query(
+    "x_nm > @xmin and x_nm < @xmax and y_nm > @ymin and y_nm < @ymax and z_nm > @zmin and z_nm < @zmax"
+)
+embedding_df[["x_nm", "y_nm", "z_nm"]] = embedding_df[["x_nm", "y_nm", "z_nm"]].astype(
+    int
+)
+embedding_df = embedding_df.set_index(["x_nm", "y_nm", "z_nm"], drop=False, append=True)
 
 # %%
 import pyvista as pv
@@ -272,18 +253,19 @@ from umap import UMAP
 n_neighbors = 20
 min_dist = 0.3
 
-umap = UMAP(n_neighbors=n_neighbors, min_dist=min_dist)
+umap = UMAP(n_neighbors=n_neighbors, min_dist=min_dist, n_components=2)
 
 X = embedding_df.drop(columns=["x_nm", "y_nm", "z_nm"]).values
-X_umap = umap.fit_transform(X)
-X_umap = pd.DataFrame(X_umap, columns=["UMAP1", "UMAP2"])
+umap_df = umap.fit_transform(X)
+umap_df = pd.DataFrame(umap_df, columns=["UMAP1", "UMAP2"], index=embedding_df.index)
 
 # %%
 import matplotlib.pyplot as plt
 
 fig, ax = plt.subplots()
-sns.scatterplot(data=X_umap, x="UMAP1", y="UMAP2", ax=ax, s=0.2, alpha=0.5, linewidth=0)
-
+sns.scatterplot(
+    data=umap_df, x="UMAP1", y="UMAP2", ax=ax, s=0.2, alpha=0.5, linewidth=0
+)
 
 # %%
 from neurovista import to_mesh_polydata
@@ -291,198 +273,227 @@ from neurovista import to_mesh_polydata
 cv = client.info.segmentation_cloudvolume()
 cv.cache.enabled = True
 
-X_umap_df = pd.DataFrame(
-    data=X_umap.values, columns=["UMAP1", "UMAP2"], index=embedding_df.index
-)
 # %%
-root_counts = embedding_df.groupby("root_id").size().sort_values(ascending=False)
+umap_color_df = umap_df.copy()
+
+from sklearn.preprocessing import RobustScaler
+
+scaler = RobustScaler(quantile_range=(2, 98))
+scaled_X = scaler.fit_transform(umap_color_df)
+print(scaled_X.min(), scaled_X.max())
+
+scaled_X /= np.abs(scaled_X).max() * 2
+print(scaled_X.min(), scaled_X.max())
+
+scaled_X += 0.5
+
+print(scaled_X.min(), scaled_X.max())
+
+
+umap_color_df = pd.DataFrame(
+    scaled_X,
+    columns=umap_color_df.columns,
+    index=umap_color_df.index,
+)
+
+
+# sns.scatterplot(data=umap_color_df, x="UMAP1", y="UMAP2", s=0.2, alpha=0.5, linewidth=0)
+
+# X = umap_color_df[["UMAP1", "UMAP2"]].values
+
+# # rotate into 3D
+# X = np.hstack([X, 0.5 * np.ones((len(X), 1))])
+
+# umap_color_df["x"] = X[:, 0]
+# umap_color_df["y"] = X[:, 1]
+# umap_color_df["z"] = X[:, 2]
+
+
+# umap_color_df["UMAP1"] = umap_color_df["UMAP1"] - umap_color_df["UMAP1"].min()
+# umap_color_df["UMAP1"] = (
+#     umap_color_df["UMAP1"] / umap_color_df["UMAP1"].max() * 0.8 + 0.1
+# )
+# umap_color_df["UMAP2"] = umap_color_df["UMAP2"] - umap_color_df["UMAP2"].min()
+# umap_color_df["UMAP2"] = (
+#     umap_color_df["UMAP2"] / umap_color_df["UMAP2"].max() * 0.8 + 0.1
+# )
+# umap_color_df["UMAP3"] = umap_color_df["UMAP3"] - umap_color_df["UMAP3"].min()
+# umap_color_df["UMAP3"] = (
+#     umap_color_df["UMAP3"] / umap_color_df["UMAP3"].max() * 0.8 + 0.1
+# )
+
+# umap_color_df["UMAP1"] = umap_color_df["UMAP1"] * 100
+# umap_color_df["UMAP2"] = umap_color_df["UMAP2"] * 255 - 128
+# umap_color_df["UMAP3"] = umap_color_df["UMAP3"] * 255 - 128
+
+# from colormath.color_conversions import convert_color
+# from colormath.color_objects import sRGBColor
+# from tqdm.auto import tqdm
+
+# colors = []
+# for i, (root_id, row) in enumerate(
+#     tqdm(umap_color_df.iterrows(), total=len(umap_color_df))
+# ):
+#     # color = LabColor(
+#     #     row["UMAP1"] * 100,
+#     #     row["UMAP2"] * 255 - 128,
+#     #     row["UMAP3"] * 255 - 128,
+#     # )
+#     # color = convert_color(color, sRGBColor)
+#     # # color = color.get_value_tuple()
+#     color = sRGBColor(
+#         row["x"],
+#         row["y"],
+#         row["z"],
+#     )
+#     # color = HSLColor(
+#     #     row["x"],
+#     #     row["y"],
+#     #     row["z"],
+#     # )
+#     color = convert_color(color, sRGBColor)
+#     color = color.get_value_tuple()
+#     colors.append(dict(zip(["r", "g", "b"], color)))
+
+# colors_df = pd.DataFrame(colors, index=umap_color_df.index)
+
+# umap_color_df = umap_color_df.join(colors_df)
+
+
+# X = umap_color_df.sample(10000)
+# plotter = pv.Plotter()
+# plotter.add_mesh(
+#     X[["x", "y", "z"]].values,
+#     point_size=10,
+#     scalars=X[["r", "g", "b"]].values,
+#     rgb=True,
+#     render_points_as_spheres=True,
+# )
+# plotter.show()
 
 # %%
-test_root = root_counts.index[314]
 
-from cloudvolume import Bbox
+# from sklearn.mixture import GaussianMixture
+# from sklearn.cluster import AgglomerativeClustering
+# n_clusters = 8
+# # gmm = GaussianMixture(n_components=n_components, covariance_type="full", n_init=1)
+# model = AgglomerativeClustering(n_clusters=n_clusters)
+# labels = gmm.fit_predict(umap_color_df[["UMAP1", "UMAP2"]].values)
+# umap_color_df["label"] = labels.astype(str)
 
-box = Bbox(*padded_box_cg.tolist())
 
-mesh = cv.mesh.get(test_root, bounding_box=box, deduplicate_chunk_boundaries=False)[
-    test_root
-]
+from scipy.cluster.hierarchy import fcluster, linkage
 
-mesh_poly = to_mesh_polydata(mesh.vertices, mesh.faces)
-mesh_poly = (
-    mesh_poly.clip_surface(padded_box_poly, invert=True).clean().extract_largest()
-)
-# from fast_simplification import simplify_mesh
+n_colors = 8
 
-# mesh_poly = simplify_mesh(mesh_poly, target_reduction=0.95, agg=9)
+method = "complete"
+cluster_on = "embedding"
+if cluster_on == "umap":
+    X = umap_color_df[["UMAP1", "UMAP2"]].values
+    metric = "euclidean"
+elif cluster_on == "embedding":
+    X = embedding_df.drop(columns=["x_nm", "y_nm", "z_nm"]).values
+    metric = "euclidean"
+
+subsample = 30_000
+select_indices = np.random.choice(len(X), subsample, replace=False)
+X_subsample = X[select_indices]
+
+Z_subsample = linkage(X_subsample, method=method, metric=metric)
+labels_subsample = fcluster(Z_subsample, n_colors, criterion="maxclust")
+
+from sklearn.neighbors import KNeighborsClassifier
+
+knn = KNeighborsClassifier(n_neighbors=3)
+knn.fit(X_subsample, labels_subsample)
+
+labels = knn.predict(X)
+
+umap_color_df["label"] = labels.astype(str)
+umap_color_df["label_prop"] = umap_color_df["label"].astype(float) / (n_colors - 1)
+
+import seaborn as sns
+
+cmap = sns.color_palette("husl", n_colors, as_cmap=True)
+
+colors = cmap(umap_color_df["label_prop"])
+
+umap_color_df["r"] = colors[:, 0]
+umap_color_df["g"] = colors[:, 1]
+umap_color_df["b"] = colors[:, 2]
+umap_color_df["a"] = colors[:, 3]
+
+import pyvista as pv
 
 plotter = pv.Plotter()
-plotter.add_mesh(mesh_poly, color="red")
-plotter.add_mesh(padded_box_poly, color="black", style="wireframe")
-plotter.show()
 
-fig, ax = plt.subplots(1, 1, figsize=(8, 8))
+# %%
+fig, ax = plt.subplots()
 sns.scatterplot(
-    data=X_umap_df,
+    data=umap_color_df,
     x="UMAP1",
     y="UMAP2",
     ax=ax,
     s=0.2,
     alpha=0.5,
     linewidth=0,
-    color="grey",
-)
-sns.scatterplot(
-    data=X_umap_df.loc[test_root],
-    x="UMAP1",
-    y="UMAP2",
-    ax=ax,
-    s=10,
-    alpha=1,
-    # linewidth=,
-    color="darkred",
-    zorder=10,
+    hue="label",
 )
 
 
 # %%
-
-import time
-
-from sklearn.neighbors import kneighbors_graph
-
-currtime = time.time()
-
-n_neighbors = 20
-adjacency = kneighbors_graph(points, n_neighbors=n_neighbors, n_jobs=-1)
-
-print(f"{time.time() - currtime:.3f} seconds elapsed.")
+root_counts = embedding_df.groupby("root_id").size().sort_values(ascending=False)
 
 # %%
-edges = np.nonzero(adjacency)
 
-lines = np.stack((np.full(len(edges[0]), 2), *edges)).T
+from cloudvolume import Bbox
+from sklearn.neighbors import NearestNeighbors
 
-point_graph_poly = pv.PolyData(points, lines=lines)
+pull_meshes = False
+if pull_meshes:
+    test_roots = root_counts.index[100:150]
+
+    box = Bbox(*padded_box_cg.tolist())
+
+    cv_meshes = cv.mesh.get(
+        test_roots, bounding_box=box, deduplicate_chunk_boundaries=False
+    )
+
+# %%
+
+from tqdm.auto import tqdm
+
+mesh_polys = {}
+for test_root, mesh in tqdm(cv_meshes.items(), total=len(cv_meshes)):
+    mesh_poly = to_mesh_polydata(mesh.vertices, mesh.faces)
+    mesh_poly = (
+        mesh_poly.clip_surface(padded_box_poly, invert=True)
+        .extract_largest()
+        .clean()
+        .smooth(n_iter=100)
+    )
+    mesh_poly = simplify_mesh(mesh_poly, target_reduction=0.8, agg=8)
+
+    sub_embedding_df = embedding_df.iloc[embedding_df.index.get_loc(test_root)]
+    X = sub_embedding_df[["x_nm", "y_nm", "z_nm"]].values
+    neighbors = NearestNeighbors(n_neighbors=1).fit(X)
+    distances, indices = neighbors.kneighbors(mesh_poly.points)
+    umap_colors = umap_color_df.loc[sub_embedding_df.index[indices.flatten()]]
+    mesh_poly["colors"] = umap_colors[["r", "g", "b"]].values
+
+    mesh_polys[test_root] = mesh_poly
+
+
+# %%
 
 plotter = pv.Plotter()
-plotter.add_mesh(point_graph_poly, color="black", line_width=1)
-plotter.show()
 
-# %%
-cv = client.info.segmentation_cloudvolume()
-bounds = cv.bounds
+for test_root, mesh_poly in mesh_polys.items():
+    plotter.add_mesh(mesh_poly, scalars="colors", rgba=True)
 
-cg_bounds = bounds.to_list()
-
-# %%
-
-test_id = (embedding_df.groupby("past_id").size() - 1001).abs().idxmin()
-# test_id = 864691135981371228
-
-test_mesh = cv.mesh.get(test_id)[test_id]
-
-
-def to_mesh_polydata(
-    nodes: np.ndarray,
-    faces: np.ndarray,
-):
-    points = nodes.astype(float)
-
-    faces = np.hstack([np.full((len(faces), 1), 3), faces])
-
-    poly = pv.PolyData(points, faces=faces)
-
-    return poly
-
-
-test_mesh = to_mesh_polydata(test_mesh.vertices, test_mesh.faces)
-test_mesh.plot()
-
-# %%
-points = embedding_df.droplevel("root_id").loc[test_id, ["x_nm", "y_nm", "z_nm"]].values
-
-# %%
-
-pv.set_jupyter_backend("client")
-volume_bounds = np.array([cg_bounds[:3], cg_bounds[3:]])
-volume_bounds = volume_bounds * np.array([8, 8, 40])
-
-box = pv.Box(
-    [
-        volume_bounds[0, 0],
-        volume_bounds[1, 0],
-        volume_bounds[0, 1],
-        volume_bounds[1, 1],
-        volume_bounds[0, 2],
-        volume_bounds[1, 2],
-    ]
-)
-
-plotter = pv.Plotter()
-# plotter.add_mesh(box, color="black", style="wireframe")
-# plotter.add_mesh(point_cloud, point_size=0.1)
-
-# plotter.add_mesh(points, color="red", point_size=2, style="wireframe", opacity=0.5)
-
-
-# points_moved = points + volume_bounds[0] * np.array([0.5, 0.5, 1])
-# plotter.add_mesh(points_moved, color="blue", point_size=2)
-
-points_moved2 = points + np.array([13824, 13824, 14816]) * np.array([8, 8, 40])
-plotter.add_mesh(points_moved2, color="green", point_size=10)
-
-plotter.add_mesh(test_mesh, color="red", opacity=0.5)
+plotter.add_mesh(og_box_poly, color="black", style="wireframe")
+plotter.add_mesh(padded_box_poly, color="red", style="wireframe")
 
 plotter.show()
-
-
-# %%
-from sklearn.decomposition import PCA
-
-X = embedding_df.drop(columns=["x_nm", "y_nm", "z_nm"]).values
-n_components = 4
-pca = PCA(n_components=n_components, whiten=True)
-
-X_pca = pca.fit_transform(X)
-X_pca = pd.DataFrame(X_pca, columns=[f"PC{i}" for i in range(n_components)])
-
-
-# %%
-import seaborn as sns
-
-X_df = pd.DataFrame(X)
-pg = sns.PairGrid(X_df.iloc[:, :8], corner=True)
-
-pg.map_lower(sns.scatterplot, s=15, alpha=0.3)
-
-# %%
-pg = sns.PairGrid(X_pca, corner=True)
-
-pg.map_lower(sns.scatterplot, s=1, alpha=0.01, linewidth=0)
-
-
-# %%
-
-from umap import UMAP
-
-n_neighbors = 20
-min_dist = 0.3
-
-umap = UMAP(n_neighbors=n_neighbors, min_dist=min_dist)
-
-X_umap = umap.fit_transform(X)
-X_umap = pd.DataFrame(X_umap, columns=["UMAP1", "UMAP2"])
-
-# %%
-pg = sns.PairGrid(X_umap, corner=True)
-
-pg.map_lower(sns.scatterplot, linewidth=0)
-
-# %%
-import matplotlib.pyplot as plt
-
-fig, ax = plt.subplots()
-sns.scatterplot(data=X_umap, x="UMAP1", y="UMAP2", ax=ax, s=0.2, alpha=0.5, linewidth=0)
 
 # %%
