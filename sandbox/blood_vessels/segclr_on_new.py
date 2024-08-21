@@ -2,15 +2,19 @@
 from pathlib import Path
 
 import gcsfs
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import pyvista as pv
 import seaborn as sns
 from caveclient import CAVEclient
 from fast_simplification import simplify_mesh
 from joblib import Parallel, delayed
 from tqdm_joblib import tqdm_joblib
+from umap import UMAP
 
 from connectomics.segclr import reader
+from neurovista import to_mesh_polydata
 
 # %%
 
@@ -25,7 +29,7 @@ client.materialize.version = 1078
 
 # %%
 df = pd.read_csv(
-    "troglobyte-sandbox/data/blood_vessels/segments_per_branch_2024-07-11.csv"
+    "troglobyte-sandbox/data/blood_vessels/segments_per_branch_2024-08-19.csv"
 )
 target_df = df.set_index("IDs")
 target_df.index.name = "root_id"
@@ -59,12 +63,17 @@ box_params["z_max"] = box_params["PointB_Z"] * box_params["mip_res_Z"]
 box_params.set_index(["x_min", "y_min", "z_min", "x_max", "y_max", "z_max"])[
     "BranchTypeName"
 ]
+# %%
+box_params = box_params.reset_index().set_index("BranchTypeName")
 
 
 # %%
 pad_distance = 10_000
 
-i = 0
+# i = 0
+branch = "CVT_Layernan_branch75"
+i = box_params.index.get_loc(branch)
+
 lower = box_params.iloc[i][["x_min", "y_min", "z_min"]].values
 upper = box_params.iloc[i][["x_max", "y_max", "z_max"]].values
 og_box = np.array([lower, upper])
@@ -73,11 +82,12 @@ padded_box = og_box.copy()
 padded_box[0] -= np.array(pad_distance)
 padded_box[1] += np.array(pad_distance)
 
-box_name = str(og_box.astype(int).ravel()).strip("[]").replace(" ", "_")
+# box_name = str(og_box.astype(int).ravel()).strip("[]").replace(" ", "_")
+box_name = branch
 
 query_root_ids = (
     target_df.reset_index()
-    .set_index(["BranchX", "BranchY", "BranchZ"])
+    .set_index("BranchTypeName")
     .loc[box_params.index[i]]["root_id"]
 ).values
 
@@ -130,10 +140,10 @@ if pull_embeddings or not (out_path / f"embedding_df_{box_name}.csv.gz").exists(
     root_info.to_csv(out_path / f"root_info_{box_name}.csv.gz")
 
     big_past_root_ids = (
-        root_info.groupby("past_root_id")["n_leaves"]
+        root_info.groupby("past_root_id")["n_level2_ids"]
         .sum()
         .to_frame()
-        .query(f"n_leaves >= {threshold}")
+        .query(f"n_level2_ids >= {threshold}")
         .index
     )
 
@@ -182,31 +192,32 @@ if pull_embeddings or not (out_path / f"embedding_df_{box_name}.csv.gz").exists(
         "x_nm > @xmin and x_nm < @xmax and y_nm > @ymin and y_nm < @ymax and z_nm > @zmin and z_nm < @zmax"
     )
     embedding_df = embedding_df.droplevel(["x", "y", "z"])
-
+    embedding_df = embedding_df.set_index(
+        ["x_nm", "y_nm", "z_nm"], drop=False, append=True
+    )
     embedding_df.to_csv(out_path / f"embedding_df_{box_name}.csv.gz")
 
 else:
     embedding_df = pd.read_csv(
-        out_path / f"embedding_df_{box_name}.csv.gz", index_col=[0, 1]
+        out_path / f"embedding_df_{box_name}.csv.gz", index_col=[0, 1, 2, 3, 4]
     )
 
-xmin = padded_box[0, 0]
-xmax = padded_box[1, 0]
-ymin = padded_box[0, 1]
-ymax = padded_box[1, 1]
-zmin = padded_box[0, 2]
-zmax = padded_box[1, 2]
+# xmin = padded_box[0, 0]
+# xmax = padded_box[1, 0]
+# ymin = padded_box[0, 1]
+# ymax = padded_box[1, 1]
+# zmin = padded_box[0, 2]
+# zmax = padded_box[1, 2]
 
-embedding_df = embedding_df.query(
-    "x_nm > @xmin and x_nm < @xmax and y_nm > @ymin and y_nm < @ymax and z_nm > @zmin and z_nm < @zmax"
-)
-embedding_df[["x_nm", "y_nm", "z_nm"]] = embedding_df[["x_nm", "y_nm", "z_nm"]].astype(
-    int
-)
-embedding_df = embedding_df.set_index(["x_nm", "y_nm", "z_nm"], drop=False, append=True)
+# embedding_df = embedding_df.query(
+#     "x_nm > @xmin and x_nm < @xmax and y_nm > @ymin and y_nm < @ymax and z_nm > @zmin and z_nm < @zmax"
+# )
+# embedding_df[["x_nm", "y_nm", "z_nm"]] = embedding_df[["x_nm", "y_nm", "z_nm"]].astype(
+#     int
+# )
+
 
 # %%
-import pyvista as pv
 
 pv.set_jupyter_backend("client")
 
@@ -237,8 +248,10 @@ plotter.add_mesh(padded_box_poly, color="red", style="wireframe")
 plotter.show()
 
 # %%
+print(embedding_df.shape)
 
-from umap import UMAP
+# %%
+
 
 n_neighbors = 20
 min_dist = 0.3
@@ -250,7 +263,6 @@ umap_df = umap.fit_transform(X)
 umap_df = pd.DataFrame(umap_df, columns=["UMAP1", "UMAP2"], index=embedding_df.index)
 
 # %%
-import matplotlib.pyplot as plt
 
 fig, ax = plt.subplots()
 sns.scatterplot(
@@ -258,7 +270,6 @@ sns.scatterplot(
 )
 
 # %%
-from neurovista import to_mesh_polydata
 
 cv = client.info.segmentation_cloudvolume()
 cv.cache.enabled = True
