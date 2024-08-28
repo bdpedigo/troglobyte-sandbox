@@ -16,8 +16,6 @@ client.materialize.version = 943
 
 wrangler = CAVEWrangler(client=client, n_jobs=-1, verbose=3)
 
-# %%
-
 
 #%%
 target_df = (

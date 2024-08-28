@@ -95,13 +95,13 @@ bounding_box = Bbox(bounds_min_cg, bounds_max_cg)
 
 # cv.mesh.get(sub_target_df.index[:100], dedupli)
 
-# cv.mesh.get(
-#     sub_target_df.index[:10],
-#     bounding_box=bounding_box,
-#     deduplicate_chunk_boundaries=False,
-#     remove_duplicate_vertices=False,
-#     allow_missing=False,
-# )
+cv.mesh.get(
+    sub_target_df.index[:10],
+    bounding_box=bounding_box,
+    deduplicate_chunk_boundaries=False,
+    remove_duplicate_vertices=False,
+    allow_missing=False,
+)
 
 
 # %%

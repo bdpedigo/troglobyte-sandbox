@@ -2,11 +2,17 @@
 import time
 
 import fast_simplification
+import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import pyvista as pv
+import seaborn as sns
 from caveclient import CAVEclient
 from cloudvolume import Mesh as CVMesh
+from fastcluster import linkage
 from pymeshfix import MeshFix
+from scipy.cluster.hierarchy import fcluster
+from sklearn.neighbors import KNeighborsClassifier
 
 from neurovista import bounds_to_box, to_mesh_polydata
 from pyFM.mesh import TriMesh
@@ -16,7 +22,8 @@ pv.set_jupyter_backend("client")
 
 client = CAVEclient("minnie65_public", version=1078)
 
-root_ids = [864691135469080402]
+# root_ids = [864691135469080402]
+root_ids = [864691135518844810]
 
 nuc_info = client.materialize.query_table(
     "nucleus_detection_v0",
@@ -26,7 +33,7 @@ nuc_info = client.materialize.query_table(
 nuc_loc = nuc_info[["pt_position_x", "pt_position_y", "pt_position_z"]].values.squeeze()
 nuc_loc = nuc_loc * np.array([4, 4, 40])
 
-pad = 100_000
+pad = 50_000
 # pad = 30_000
 box_min = nuc_loc - pad
 box_max = nuc_loc + pad
@@ -48,14 +55,22 @@ object_meshes = cv.mesh.get(root_ids, deduplicate_chunk_boundaries=False)
 def process_mesh(mesh: CVMesh, crop=False):
     mesh_poly = to_mesh_polydata(mesh.vertices, mesh.faces)
     if crop:
+        print("Cropping mesh")
+        currtime = time.time()
         mesh_poly = mesh_poly.clip_surface(box)
+        print(f"{time.time() - currtime:.3f} seconds elapsed to crop.")
+
+    # hoping to smooth out the mesh a bit and also reduce the number of faces
     mesh_poly = mesh_poly.clean().triangulate().smooth(n_iter=100).extract_largest()
     mesh_poly = fast_simplification.simplify_mesh(
         mesh_poly, target_reduction=0.8, agg=8
     ).extract_largest()
+
+    # was finding that some meshes got eigendecomposition errors before I did this
     mesh_fix = MeshFix(mesh_poly)
     mesh_fix.repair()
     mesh_poly = mesh_fix.mesh
+
     return mesh_poly
 
 
@@ -85,7 +100,7 @@ print(polydata)
 # %%
 
 
-def polydata_to_decomposed_trimesh(polydata: pv.PolyData, k=800):
+def polydata_to_decomposed_trimesh(polydata: pv.PolyData, k=1000):
     faces = polydata.faces.reshape(-1, 4)[:, 1:]
     points = polydata.points
     trimesh = TriMesh(points, faces)
@@ -102,6 +117,11 @@ object_trimeshes = {
 }
 print(f"{time.time() - currtime:.3f} seconds elapsed to eigendecompose.")
 
+# %%
+
+trimesh = object_trimeshes[root_ids[0]]
+print(trimesh.eigenvalues.max())
+sns.lineplot(x=range(len(trimesh.eigenvalues)), y=trimesh.eigenvalues)
 
 # %%
 
@@ -123,8 +143,10 @@ def compute_hks(
 hks_by_object = {}
 
 t_min = 1e4
-t_max = 1e8  # had 1e12
-n_components = 64
+# t_max = 1e8  # had 1e12
+# t_max = 1e10
+t_max = 1e12
+n_components = 128
 time_scales = np.geomspace(t_min, t_max, n_components)
 
 
@@ -144,7 +166,7 @@ print(f"{time.time() - currtime:.3f} seconds elapsed to compute HKS.")
 
 # %%
 
-i = -1
+i = 0
 # j = 20
 
 plotter = pv.Plotter()
@@ -157,14 +179,11 @@ plotter.show()
 
 # %%
 
-import matplotlib.pyplot as plt
-import pandas as pd
-import seaborn as sns
 
 sns.set_context("talk")
 
 X_df = pd.DataFrame(data=hks)
-X_train_df = X_df.sample(20_000).copy()
+X_train_df = X_df.sample(3_000).copy()
 
 X_train_df["index"] = X_train_df.index
 X_train_df_long = X_train_df.melt(
@@ -192,31 +211,47 @@ ax.set_yscale("log")
 
 
 # %%
-from scipy.cluster.hierarchy import fcluster, linkage
-from sklearn.neighbors import KNeighborsClassifier
+
+
+min_band = 30
+max_band = 50
+
+print(time_scales[min_band], time_scales[max_band])
 
 method = "average"
 metric = "euclidean"
 n_neighbors = 5
-n_clusters = 8
-X = np.log(X_train_df.values)
+n_clusters = 20
+palette = "husl"
+
+X_train_df = X_df.sample(40_000).copy()
+X_train_df = X_train_df
+
+
+X = np.log(X_train_df.values[:, min_band:max_band])
 
 currtime = time.time()
 
 Z = linkage(X, method=method, metric=metric)
 labels = fcluster(Z, n_clusters, criterion="maxclust")
 
-husl = sns.color_palette("husl", n_clusters, as_cmap=True)
-colors = husl(labels / n_clusters)
-
-
 knn = KNeighborsClassifier(n_neighbors=n_neighbors)
 knn.fit(X, labels)
 
-full_labels = knn.predict(np.log(X_df.values))
+full_labels = knn.predict(np.log(X_df.values[:, min_band:max_band]))
 print(f"{time.time() - currtime:.3f} seconds elapsed to cluster.")
 
-# %%
+
+if palette == "husl":
+    scale = 1.3
+    cmap = sns.husl_palette(h=0, n_colors=n_clusters * scale, as_cmap=True)
+    colors = cmap(labels / (n_clusters * scale))
+elif palette == "tab20":
+    cmap = sns.color_palette(palette, n_clusters, as_cmap=True)
+    colors = cmap(labels / n_clusters)
+
+# TODO add something to remap labels
+# np.log(X_train_df).groupby(labels)[X_train_df.columns[-1]]
 
 sns.clustermap(
     X.T,
@@ -229,14 +264,13 @@ sns.clustermap(
     yticklabels=False,
 )
 
+scaled_labels = full_labels / (n_clusters * scale)
+polydata["label"] = scaled_labels
 
 # %%
-polydata["label"] = full_labels / n_clusters
-
-cmap = sns.color_palette("tab20", n_clusters, as_cmap=True)
 
 plotter = pv.Plotter()
-plotter.add_mesh(polydata, scalars="label", cmap=cmap)
+plotter.add_mesh(polydata, scalars="label", cmap=cmap, clim=[0, 1])
 plotter.show()
 
 
