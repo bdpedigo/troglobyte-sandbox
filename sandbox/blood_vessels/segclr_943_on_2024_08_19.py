@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pyvista as pv
+import seaborn as sns
 from caveclient import CAVEclient
 from cloudvolume import Bbox
 from skops.io import load
@@ -91,7 +92,7 @@ for i in range(len(box_params)):
     sub_target_df = target_df[target_df["box_id"] == i]
     query_ids = sub_target_df.index
     if test:
-        query_ids = query_ids[:100]
+        query_ids = query_ids[:1000]
 
     currtime = time.time()
 
@@ -100,21 +101,27 @@ for i in range(len(box_params)):
     )
     query.set_query_ids(query_ids)
 
-    # query.set_query_bounds(bounds_nm)
+    query.set_query_bounds(bounds_nm)
     query.map_to_version()
     query.get_embeddings()
     query.map_to_level2()
 
     print(f"{time.time() - currtime:.3f} seconds elapsed.")
 
-    features = query.features_
+    feature_cols = np.arange(64)
+    features = query.features_[feature_cols]
     mapping = query.level2_mapping_
 
-    feature_cols = np.arange(64)
     predictions = model.predict(features[feature_cols].values)
     predictions = pd.Series(
         predictions, index=features.index, name="pred_label"
     ).to_frame()
+    posteriors = model.predict_proba(features[feature_cols].values)
+    posteriors = pd.DataFrame(
+        posteriors, index=features.index, columns=model.classes_
+    ).add_prefix("posterior_")
+
+    predictions = predictions.join(posteriors)
 
     joined_features = features.join(mapping)
     joined_features = joined_features.join(predictions)
@@ -127,138 +134,12 @@ for i in range(len(box_params)):
     if test:
         break
 
-
-# %%
-
-import gcsfs
-import numpy as np
-import pandas as pd
-
-from connectomics.common import sharding
-from connectomics.segclr.reader import DATA_URL_FROM_KEY_BYTEWIDTH64, EmbeddingReader
-
-DATA_URL_FROM_KEY_BYTEWIDTH64["microns_v943"] = (
-    "gs://iarpa_microns/minnie/minnie65/embeddings_m943/segclr_nm_coord_public_offset_csvzips"
-)
-
-
-def get_reader(key: str, filesystem, num_shards: int = 50_000):
-    """Convenience helper to get reader for given dataset key."""
-    if key in DATA_URL_FROM_KEY_BYTEWIDTH64:
-        url = DATA_URL_FROM_KEY_BYTEWIDTH64[key]
-        bytewidth = 8
-    else:
-        raise ValueError(f"Key not found: {key}")
-
-    def sharder(segment_id: int) -> int:
-        shard = sharding.md5_shard(
-            segment_id, num_shards=num_shards, bytewidth=bytewidth
-        )
-        # print(shard)
-        return shard
-
-    return EmbeddingReader(filesystem, url, sharder)
-
-
-PUBLIC_GCSFS = gcsfs.GCSFileSystem(token="anon")
-embedding_reader = get_reader("microns_v943", PUBLIC_GCSFS)
-
-# from tqdm.auto import tqdm
-
-# for idx in tqdm(range(1000)):
-#     try:
-#         out = embedding_reader[int(sub_target_df.index[idx])]
-#         break
-#     except KeyError:
-#         continue
-
-embedding_reader[864691135155879268]
-
-# %%
-# # %%
-# client.chunkedgraph.get_root_timestamps(864691135155879268, latest=True)
-
-# # %%
-# client_943 = CAVEclient("minnie65_public", version=943)
-# client.chunkedgraph.is_valid_nodes(864691135155879268)
-
-
-# # %%
-# from cloudfiles import CloudFiles
-
-# cf = CloudFiles(
-#     "gs://iarpa_microns/minnie/minnie65/embeddings_m943/segclr_nm_coord_public_offset_csvzips"
-# )
-# for i in cf.list():
-#     print(i)
-#     break
-
-
-import os
-import zipfile
-
-seg_id = 864691135155879268
-shard = embedding_reader._sharder(seg_id)
-zip_path = os.path.join(embedding_reader._zipdir, f"{shard}.zip")
-with embedding_reader._filesystem.open(zip_path) as f:
-    with zipfile.ZipFile(f) as z:
-        files_in_zip = z.namelist()
-        assert f"{seg_id}.csv" not in files_in_zip
-        # with z.open(f"{seg_id}.csv") as c:
-        #     out = c.read().decode("utf-8")
-
-
-roots_in_zip = [int(f.split(".")[0]) for f in files_in_zip]
-roots_in_zip = np.sort(roots_in_zip)
-
-print(len(roots_in_zip))
-index = np.searchsorted(roots_in_zip, seg_id)
-
-print("Index:", index)
-
-
-import seaborn as sns
-from matplotlib import pyplot as plt
-
-print(roots_in_zip[index - 1], seg_id, roots_in_zip[index])
-
-fig, ax = plt.subplots(1, 1, figsize=(6, 5))
-
-sns.lineplot(y=roots_in_zip[index - 10 : index + 10], x=np.arange(-10, 10), ax=ax)
-ax.scatter(0, seg_id, color="red")
-
-# %%
-zips = list(cf.list())
-
-# %%
-cf2 = CloudFiles(
-    "gs://iarpa_microns/minnie/minnie65/embeddings_m943/segclr_nm_coord_public_offset_csvzips"
-    + zips[0]
-)
-next(cf2.list())
-
-# %%
-client.chunkedgraph.get_leaves(
-    query.query_ids[0], stop_layer=2, bounds=query.bounds_seg.astype(int).T
-)
-
 # %%
 
 sample_roots = predictions.index.get_level_values("current_id").unique()
-sample_roots = pd.Series(sample_roots, name="current_id").sample(300)
-
-root_prediction_counts = predictions.to_frame().groupby("current_id").value_counts()
-root_prediction_probs = (
-    root_prediction_counts / root_prediction_counts.groupby("current_id").sum()
+sample_roots = pd.Series(sample_roots, name="current_id").sample(
+    min(200, len(sample_roots))
 )
-root_predictions = pd.DataFrame(
-    {"pred_label": predictions.groupby("current_id").mode().values.flatten()}
-)
-
-# %%
-
-weights = 1 / predictions.value_counts()
-weights = weights / weights.sum()
 
 # %%
 bounding_box = Bbox(bounds_min_cg, bounds_max_cg)
@@ -272,33 +153,8 @@ cv = client.info.segmentation_cloudvolume()
 cv.cache.enabled = True
 
 
-cv.mesh.get(
-    sub_target_df.index[:10],
-    bounding_box=bounding_box,
-    deduplicate_chunk_boundaries=False,
-    remove_duplicate_vertices=False,
-    allow_missing=False,
-)
-
-
 # %%
-
-vessel_mesh = cv.mesh.get(
-    vessel_id,
-    bounding_box=bounding_box,
-    deduplicate_chunk_boundaries=False,
-    remove_duplicate_vertices=False,
-    allow_missing=True,
-)[vessel_id]
-
-
-# %%
-
-
 pv.set_jupyter_backend("client")
-
-
-vessel_mesh_poly = to_mesh_polydata(vessel_mesh.vertices, vessel_mesh.faces)
 
 
 def bounds_to_pyvista(bounds: np.ndarray) -> list:
@@ -318,12 +174,24 @@ bbox_pyvista = bounds_to_pyvista(bounds_nm)
 bbox_mesh = pv.Box(bounds=bbox_pyvista)
 
 
-plotter = pv.Plotter()
+vessel_mesh = cv.mesh.get(
+    vessel_id,
+    bounding_box=bounding_box,
+    deduplicate_chunk_boundaries=False,
+    remove_duplicate_vertices=False,
+    allow_missing=True,
+)
+if vessel_id not in vessel_mesh:
+    pass
+else:
+    vessel_mesh_poly = to_mesh_polydata(vessel_mesh.vertices, vessel_mesh.faces)
 
-plotter.add_mesh(vessel_mesh_poly.extract_largest(), color="red")
-plotter.add_mesh(bbox_mesh, color="black", style="wireframe")
+    plotter = pv.Plotter()
 
-plotter.show()
+    plotter.add_mesh(vessel_mesh_poly.extract_largest(), color="red")
+    plotter.add_mesh(bbox_mesh, color="black", style="wireframe")
+
+    plotter.show()
 
 
 # %%
@@ -337,7 +205,6 @@ meshes = cv.mesh.get(
 )
 # %%
 
-import seaborn as sns
 
 # available_ids = features.index.get_level_values("current_id").unique()
 available_ids = list(meshes.keys())
@@ -348,7 +215,7 @@ colors = sns.color_palette("tab10")
 palette = dict(zip(model.classes_, colors))
 
 for current_id in available_ids:
-    sub_predictions = predictions.loc[current_id].to_frame().reset_index()
+    sub_predictions = predictions.loc[current_id].reset_index()
 
     plurality_label = sub_predictions["pred_label"].mode().values[0]
 
@@ -358,14 +225,13 @@ for current_id in available_ids:
 
     plotter.add_mesh(mesh_poly, color=palette[plurality_label], smooth_shading=True)
 
-plotter.add_mesh(vessel_mesh_poly, color="red", smooth_shading=True)
-plotter.add_mesh(bbox_mesh, color="black", style="wireframe", smooth_shading=True)
+if vessel_id in vessel_mesh:
+    plotter.add_mesh(vessel_mesh_poly, color="red", smooth_shading=True)
+
+plotter.add_mesh(
+    bbox_mesh, color="black", style="wireframe", smooth_shading=True, line_width=3
+)
 
 plotter.show()
 
 # %%
-
-palette
-
-# %%
-colors
