@@ -1,16 +1,19 @@
 # %%
 
 import time
-from pathlib import Path
+from io import BytesIO
 
 import numpy as np
 import pandas as pd
 from caveclient import CAVEclient
+from cloudfiles import CloudFiles
 from sklearn.neighbors import NearestNeighbors
-from skops.io import load
 
-from minniemorpho.level2 import Level2Query
-from minniemorpho.segclr import SegCLRQuery
+from minniemorpho.models import load_model
+from minniemorpho.query import Level2Query, SegCLRQuery
+
+out_path = "gs://allen-minnie-phase3/vasculature_feature_pulls/segclr/2024-08-19"
+cf = CloudFiles(out_path)
 
 # %%
 
@@ -87,14 +90,28 @@ def map_to_closest(source_X, target_X):
     return mapping_df
 
 
-out_path = Path("troglobyte-sandbox/data/blood_vessels/segclr/2024-08-19")
+def write_dataframe(df, path):
+    with BytesIO() as f:
+        df.to_csv(f, index=True)
+        cf.put(path, f)
+
+
+def load_dataframe(path, **kwargs):
+    bytes_out = cf.get(path)
+    with BytesIO(bytes_out) as f:
+        df = pd.read_csv(f, **kwargs)
+    return df
+
+
+# out_path = Path("troglobyte-sandbox/data/blood_vessels/segclr/2024-08-19")
+
 seg_res = np.array(client.chunkedgraph.segmentation_info["scales"][0]["resolution"])
 
-model_path = Path("minniemorpho/models/segclr_logreg_bdp.skops")
-model = load(model_path)
+model = load_model("segclr_logreg_bdp")
 classes = model.classes_
 
-test = False
+distance_threshold = 2_000
+test = True
 
 for i in range(len(box_params)):
     i = 4
@@ -108,7 +125,7 @@ for i in range(len(box_params)):
     sub_target_df = target_df[target_df["box_id"] == i]
     query_ids = sub_target_df.index
     if test:
-        query_ids = query_ids[:100]
+        query_ids = query_ids[1000:1100]
 
     currtime = time.time()
 
@@ -181,15 +198,20 @@ for i in range(len(box_params)):
     posteriors = pd.DataFrame(
         posteriors, index=segclr_features.index, columns=model.classes_
     ).add_suffix("_posterior")
-
     predictions = predictions.join(posteriors)
     segclr_features = segclr_features.join(predictions)
 
-    level2_features["n_segclr_pts"] = segclr_features.groupby(
+    write_dataframe(segclr_features, f"{box_name}_segclr_features.csv.gz")
+
+    filtered_segclr_features = segclr_features[
+        segclr_features["distance_to_level2"] <= distance_threshold
+    ]
+    filtered_predictions = predictions.loc[filtered_segclr_features.index]
+    level2_features["n_segclr_pts"] = filtered_segclr_features.groupby(
         ["root_id", "level2_id"]
     ).size()
-    level2_predictions = predictions.groupby(segclr_features["level2_id"])[
-        predictions.columns.drop("pred_label")
+    level2_predictions = filtered_predictions.groupby(filtered_segclr_features["level2_id"])[
+        filtered_predictions.columns.drop("pred_label")
     ].mean()
     level2_predictions["pred_label"] = (
         level2_predictions[[f"{cl}_posterior" for cl in model.classes_]]
@@ -198,6 +220,8 @@ for i in range(len(box_params)):
     )
 
     level2_features = level2_features.join(level2_predictions)
+
+    write_dataframe(level2_features, f"{box_name}_level2_features.csv.gz")
 
     # joined_features = features.join(mapping)
     # joined_features = joined_features.join(predictions)
@@ -212,6 +236,12 @@ for i in range(len(box_params)):
 
     break
 
+# %%
+
+load_dataframe(f"{box_name}_segclr_features.csv.gz", index_col=[0, 1, 2, 3, 4])
+
+#%%
+load_dataframe(f"{box_name}_level2_features.csv.gz", index_col=[0, 1])
 
 # %%
 
