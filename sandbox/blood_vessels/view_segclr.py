@@ -95,7 +95,7 @@ timestamp = client.timestamp
 
 level2_ids = seg_df["level2_id"].unique()
 max_level = 6
-min_level = 3
+min_level = 4
 for level in range(min_level, max_level + 1):
     print(level)
     level_ids = client.chunkedgraph.get_roots(
@@ -105,7 +105,7 @@ for level in range(min_level, max_level + 1):
     seg_df[f"level{level}_id"] = seg_df["level2_id"].map(level_map)
 
 # %%
-level_names = [f"level{level}_id" for level in range(2, max_level + 1)]
+level_names = [f"level{level}_id" for level in range(min_level, max_level + 1)]
 level_names += ["current_id"]
 
 
@@ -125,46 +125,58 @@ for level_name in level_names:
     if level_name == "object_id":
         level_name = "root_id"
     new_df["level"] = level_name
+    new_df["label"] = new_df[[f"{cl}_prop" for cl in model.classes_]].idxmax(axis=1)
+    new_df["label"] = new_df["label"].str.replace("_prop", "")
     mixed_level_df.append(new_df.reset_index())
 
 mixed_level_df = pd.concat(mixed_level_df, ignore_index=True).reset_index(drop=True)
 # %%
 
-
-
 import numpy as np
+import seaborn as sns
+from nglui import statebuilder
 from nglui.segmentprops import SegmentProperties
-from cloudfiles import CloudFiles
-import json
+
+colors = sns.color_palette("tab10").as_hex()
+palette = dict(
+    zip(["dendrite", "axon", "glia", "perivascular", "soma", "thick/myelin"], colors)
+)
+
+
 seg_df = mixed_level_df.copy()
 # seg_df = seg_df.sample(20000)
 
-n_randoms = 2
+n_randoms = 1
 for i in range(n_randoms):
     seg_df[f"random_{i}"] = np.random.uniform(0, 1, size=len(seg_df))
 
 
-seg_prop = SegmentProperties.from_dataframe(
-    seg_df.reset_index(),
-    id_col="node_id",
-    label_col="node_id",
-    tag_value_cols=["level"],
-    number_cols=[f"random_{i}" for i in range(n_randoms)]
-    # + ["lumen_min_dist"]
-    + [f"{cl}_prop" for cl in model.classes_],
-)
+prop_urls = {}
+for label, label_seg_df in seg_df.groupby("label"):
+    seg_prop = SegmentProperties.from_dataframe(
+        label_seg_df.reset_index(),
+        id_col="node_id",
+        label_col="node_id",
+        tag_value_cols=["level"],
+        number_cols=[f"random_{i}" for i in range(n_randoms)],
+        # + ["lumen_min_dist"]
+        # + [f"{cl}_prop" for cl in model.classes_],
+    )
 
-cf = CloudFiles("gs://allen-minnie-phase3/ben-segprops/vasculature")
-cf.put_json("info", bytes(json.dumps(seg_prop.to_dict())))
+    prop_id = client.state.upload_property_json(seg_prop.to_dict())
+    prop_url = client.state.build_neuroglancer_url(
+        prop_id, format_properties=True, target_site="mainline"
+    )
+    prop_urls[label] = prop_url
 
-#%%
+# import json
 
-# prop_id = client.state.upload_property_json(seg_prop.to_dict())
-# prop_url = client.state.build_neuroglancer_url(
-#     prop_id, format_properties=True, target_site="mainline"
+# cf = CloudFiles("gs://allen-minnie-phase3/ben-segprops/vasculature")
+# cf.put_json("info.json", json.dumps(seg_prop.to_dict()))
+
+# json.dump(
+#     seg_prop.to_dict(), open("troglobyte-sandbox/data/blood_vessels/segprops.json", "w")
 # )
-
-from nglui import statebuilder
 
 client = CAVEclient("minnie65_public")
 client.materialize.version = 1078
@@ -172,24 +184,65 @@ client.materialize.version = 1078
 img = statebuilder.ImageLayerConfig(
     source=client.info.image_source(),
 )
-seg = statebuilder.SegmentationLayerConfig(
-    source=client.info.segmentation_source(),
-    segment_properties=prop_url,
-    # fixed_ids=lumen_segments,
-    active=True,
-    skeleton_source="precomputed://middleauth+https://minnie.microns-daf.com/skeletoncache/api/v1/minnie65_phase3_v1/precomputed/skeleton",
+
+n_samples = 100
+base_level = 6
+seg_layers = []
+for label, prop_url in prop_urls.items():
+    label_seg_df = seg_df[seg_df["label"] == label]
+    sample_ids = label_seg_df.query(f"level == 'level{base_level}_id'")["node_id"]
+    if len(sample_ids) > n_samples:
+        sample_ids = sample_ids.sample(n_samples)
+    seg = statebuilder.SegmentationLayerConfig(
+        name=label,
+        source=client.info.segmentation_source(),
+        segment_properties=prop_url,
+        active=False,
+        fixed_ids=sample_ids,
+        fixed_id_colors=[palette[label]] * len(sample_ids),
+        # fixed_ids=lumen_segments,
+        skeleton_source="precomputed://middleauth+https://minnie.microns-daf.com/skeletoncache/api/v1/minnie65_phase3_v1/precomputed/skeleton",
+        # view_kws={"visible": False},
+    )
+    seg_layers.append(seg)
+
+
+box_map = statebuilder.BoundingBoxMapper(
+    point_column_a="point_column_a", point_column_b="point_column_b"
+)
+ann = statebuilder.AnnotationLayerConfig(
+    name="box", mapping_rules=box_map, data_resolution=[1, 1, 1]
+)
+box_df = pd.DataFrame(
+    [
+        {
+            "point_column_a": [box_info["x_min"], box_info["y_min"], box_info["z_min"]],
+            "point_column_b": [box_info["x_max"], box_info["y_max"], box_info["z_max"]],
+        }
+    ]
 )
 
-ann = statebuilder.AnnotationLayerConfig(
-    name='box',   
-)
 
 sb = statebuilder.StateBuilder(
-    layers=[img, seg],
+    layers=[img] + seg_layers + [ann],
     target_site="mainline",
     # view_kws={"zoom_3d": 0.001, "zoom_image": 0.0000001},
     client=client,
 )
 
-sb.render_state()
+state_dict = sb.render_state(data=box_df, return_as="dict")
+
+for layer in state_dict["layers"]:
+    if layer["type"] == "segmentation":
+        layer["visible"] = False
+
+state_dict["layout"] = "3d"
+
+sb = statebuilder.StateBuilder(
+    base_state=state_dict,
+    target_site="mainline",
+    client=client,
+)
+sb.render_state(return_as="html")
+
 # %%

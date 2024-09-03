@@ -5,14 +5,12 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import pyvista as pv
-import seaborn as sns
 from caveclient import CAVEclient
-from cloudvolume import Bbox
+from sklearn.neighbors import NearestNeighbors
 from skops.io import load
 
+from minniemorpho.level2 import Level2Query
 from minniemorpho.segclr import SegCLRQuery
-from neurovista import to_mesh_polydata
 
 # %%
 
@@ -73,15 +71,33 @@ box_params["volume"] = (
 
 # %%
 
+
+def map_to_closest(source_X, target_X):
+    nn = NearestNeighbors(n_neighbors=1)
+    nn.fit(target_X.values)
+    distances, indices = nn.kneighbors(
+        source_X.values,
+    )
+    distances = distances.flatten()
+    indices = indices.flatten()
+
+    mapping_df = pd.DataFrame(index=source_X.index)
+    mapping_df["target_id"] = target_X.index[indices]
+    mapping_df["distance_to_target"] = distances
+    return mapping_df
+
+
 out_path = Path("troglobyte-sandbox/data/blood_vessels/segclr/2024-08-19")
 seg_res = np.array(client.chunkedgraph.segmentation_info["scales"][0]["resolution"])
 
 model_path = Path("minniemorpho/models/segclr_logreg_bdp.skops")
 model = load(model_path)
+classes = model.classes_
 
-test = True
+test = False
 
 for i in range(len(box_params)):
+    i = 4
     box_info = box_params.iloc[i]
     box_name = box_info["BranchTypeName"]
     bounds_min_cg = (box_info[["x_min", "y_min", "z_min"]].values / seg_res).astype(int)
@@ -92,146 +108,276 @@ for i in range(len(box_params)):
     sub_target_df = target_df[target_df["box_id"] == i]
     query_ids = sub_target_df.index
     if test:
-        query_ids = query_ids[:1000]
+        query_ids = query_ids[:100]
 
     currtime = time.time()
 
-    query = SegCLRQuery(
-        client, verbose=True, n_jobs=-1, continue_on_error=True, version=943
+    segclr_query = SegCLRQuery(
+        client,
+        verbose=True,
+        n_jobs=8,
+        continue_on_error=True,
+        version=943,
+        components=64,
     )
-    query.set_query_ids(query_ids)
+    segclr_query.set_query_ids(query_ids)
+    segclr_query.set_query_bounds(bounds_nm)
+    segclr_query.get_features()
+    segclr_features = segclr_query.features_
+    found_ids = np.unique(segclr_features.index.get_level_values("root_id"))
 
-    query.set_query_bounds(bounds_nm)
-    query.map_to_version()
-    query.get_embeddings()
-    query.map_to_level2()
+    level2_query = Level2Query(
+        client,
+        verbose=True,
+        n_jobs=8,
+        continue_on_error=True,
+        attributes=["rep_coord_nm", "size_nm3", "area_nm2"],
+    )
+    level2_query.set_query_ids(found_ids)
+    level2_query.set_query_bounds(bounds_nm)
+    level2_query.get_features()
+    level2_features = level2_query.features_
+
+    root_features = (
+        level2_features.groupby("root_id")["size_nm3"]
+        .sum()
+        .rename("approx_size_in_box")
+        .to_frame()
+    )
+    root_features["n_level2_ids"] = level2_features.groupby("root_id").size()
+    root_features["n_segclr_pts"] = segclr_features.groupby("root_id").size()
 
     print(f"{time.time() - currtime:.3f} seconds elapsed.")
 
-    feature_cols = np.arange(64)
-    features = query.features_[feature_cols]
-    mapping = query.level2_mapping_
+    mappings = []
+    for root_id in found_ids:
+        root_segclr = segclr_features.loc[root_id]
+        root_level2 = level2_query.features_.loc[root_id]
 
-    predictions = model.predict(features[feature_cols].values)
+        segclr_X = root_segclr.reset_index()[["x", "y", "z"]]
+        level2_X = root_level2[["x", "y", "z"]]
+
+        root_mapping_df = map_to_closest(segclr_X, level2_X)
+        root_mapping_df["root_id"] = root_id
+        root_mapping_df[["x", "y", "z"]] = segclr_X
+        mappings.append(root_mapping_df)
+
+    mapping_df = pd.concat(mappings)
+    mapping_df.rename(
+        columns={"target_id": "level2_id", "distance_to_target": "distance_to_level2"},
+        inplace=True,
+    )
+
+    segclr_features = segclr_features.join(
+        mapping_df.set_index(["root_id", "x", "y", "z"])
+    )
+
+    feature_cols = np.arange(64)
+    predictions = model.predict(segclr_features[feature_cols].values)
     predictions = pd.Series(
-        predictions, index=features.index, name="pred_label"
+        predictions, index=segclr_features.index, name="pred_label"
     ).to_frame()
-    posteriors = model.predict_proba(features[feature_cols].values)
+    posteriors = model.predict_proba(segclr_features[feature_cols].values)
     posteriors = pd.DataFrame(
-        posteriors, index=features.index, columns=model.classes_
-    ).add_prefix("posterior_")
+        posteriors, index=segclr_features.index, columns=model.classes_
+    ).add_suffix("_posterior")
 
     predictions = predictions.join(posteriors)
+    segclr_features = segclr_features.join(predictions)
 
-    joined_features = features.join(mapping)
-    joined_features = joined_features.join(predictions)
+    level2_features["n_segclr_pts"] = segclr_features.groupby(
+        ["root_id", "level2_id"]
+    ).size()
+    level2_predictions = predictions.groupby(segclr_features["level2_id"])[
+        predictions.columns.drop("pred_label")
+    ].mean()
+    level2_predictions["pred_label"] = (
+        level2_predictions[[f"{cl}_posterior" for cl in model.classes_]]
+        .idxmax(axis=1)
+        .str.replace("_posterior", "")
+    )
 
-    if not test:
-        joined_features.to_csv(out_path / f"{box_name}_segclr_features.csv.gz")
+    level2_features = level2_features.join(level2_predictions)
 
-    print()
+    # joined_features = features.join(mapping)
+    # joined_features = joined_features.join(predictions)
 
-    if test:
-        break
+    # if not test:
+    #     joined_features.to_csv(out_path / f"{box_name}_segclr_features.csv.gz")
+
+    # print()
+
+    # if test:
+    #     break
+
+    break
+
 
 # %%
 
-sample_roots = predictions.index.get_level_values("current_id").unique()
-sample_roots = pd.Series(sample_roots, name="current_id").sample(
-    min(200, len(sample_roots))
+
+def get_level_mapping(level2_ids, levels=[4, 6]):
+    mapping_df = pd.DataFrame(index=level2_ids)
+
+    for level in levels:
+        level_ids = client.chunkedgraph.get_roots(level2_ids, stop_layer=level)
+        level_map = dict(zip(level2_ids, level_ids))
+        mapping_df[f"level{level}_id"] = mapping_df.index.map(level_map)
+    return mapping_df
+
+
+level2_ids = level2_features.index.get_level_values("level2_id").unique()
+level_mapping = get_level_mapping(level2_ids, levels=[4, 6])
+level_mapping["root_id"] = level_mapping.index.map(
+    level2_features.reset_index().set_index("level2_id")["root_id"]
+)
+level_mapping = level_mapping.reset_index().set_index(
+    ["root_id", "level6_id", "level4_id", "level2_id"]
 )
 
-# %%
-bounding_box = Bbox(bounds_min_cg, bounds_max_cg)
-
 
 # %%
+level2_features_with_levels = (
+    level2_features.join(level_mapping)
+    .reorder_levels(["root_id", "level6_id", "level4_id", "level2_id"])
+    .copy()
+)
 
-vessel_id = 864691137021018734
+dummies = pd.get_dummies(level2_features_with_levels["pred_label"])
+dummies = dummies.reindex(columns=classes, fill_value=False)
+dummies = dummies.rename(columns={cl: f"n_level2_{cl}" for cl in classes})
 
-cv = client.info.segmentation_cloudvolume()
-cv.cache.enabled = True
+level2_features_with_levels = level2_features_with_levels.join(dummies)
 
+agg_funcs = {
+    "area_nm2": "sum",
+    "size_nm3": "sum",
+    "n_segclr_pts": "sum",
+}
+agg_funcs.update({f"n_level2_{cl}": "sum" for cl in classes})
+agg_funcs.update({f"{cl}_posterior": "mean" for cl in classes})
+
+level_aggs = []
+for level in ["root_id", "level6_id", "level4_id"]:
+    level_agg = level2_features_with_levels.groupby(level).agg(agg_funcs)
+    level_agg["n_level2"] = level2_features_with_levels.groupby(level).size()
+    level_agg["level"] = level.strip("_id")
+    level_agg.index.name = "node_id"
+    level_agg.sort_values("size_nm3", ascending=False, inplace=True)
+    level_aggs.append(level_agg)
+
+mixed_level_df = pd.concat(level_aggs)
+mixed_level_df["random"] = np.random.uniform(0, 1, size=len(mixed_level_df))
+mixed_level_df["label"] = (
+    mixed_level_df[[f"{cl}_posterior" for cl in classes]]
+    .idxmax(axis=1)
+    .str.replace("_posterior", "")
+)
+mixed_level_df["area_nm2"] = mixed_level_df["area_nm2"].astype(float)
+mixed_level_df["size_nm3"] = mixed_level_df["size_nm3"].astype(float)
+# size_threshold = 53_135_360
 
 # %%
-pv.set_jupyter_backend("client")
+
+import numpy as np
+import seaborn as sns
+from nglui import statebuilder
+from nglui.segmentprops import SegmentProperties
+
+colors = sns.color_palette("tab10").as_hex()
+palette = dict(
+    zip(["dendrite", "axon", "glia", "perivascular", "soma", "thick/myelin"], colors)
+)
+
+number_cols = ["random", "size_nm3", "area_nm2", "n_segclr_pts", "n_level2"] + [
+    f"{cl}_posterior" for cl in classes
+]
+prop_urls = {}
+for label, label_seg_df in mixed_level_df.groupby("label"):
+    # label_seg_df = pd.concat(10_000 * [label_seg_df])
+    if len(label_seg_df) > 10_000:
+        label_seg_df = label_seg_df.iloc[:10_000]
+    seg_prop = SegmentProperties.from_dataframe(
+        label_seg_df.reset_index(),
+        id_col="node_id",
+        label_col="node_id",
+        tag_value_cols=["level", "label"],
+        number_cols=number_cols,
+    )
+    try:
+        prop_id = client.state.upload_property_json(seg_prop.to_dict())
+        prop_url = client.state.build_neuroglancer_url(
+            prop_id, format_properties=True, target_site="mainline"
+        )
+        prop_urls[label] = prop_url
+    except Exception as e:
+        print(e)
+
+client = CAVEclient("minnie65_public")
+client.materialize.version = 1078
+
+img = statebuilder.ImageLayerConfig(
+    source=client.info.image_source(),
+)
+
+n_samples = 100
+base_level = 6
+seg_layers = []
+for label, prop_url in prop_urls.items():
+    label_seg_df = mixed_level_df[mixed_level_df["label"] == label].reset_index()
+    sample_ids = label_seg_df.query(f"level == 'level{base_level}'")["node_id"]
+    if len(sample_ids) > n_samples:
+        sample_ids = sample_ids.sample(n_samples)
+    seg = statebuilder.SegmentationLayerConfig(
+        name=label,
+        source=client.info.segmentation_source(),
+        segment_properties=prop_url,
+        active=False,
+        fixed_ids=sample_ids,
+        fixed_id_colors=[palette[label]] * len(sample_ids),
+        # fixed_ids=lumen_segments,
+        skeleton_source="precomputed://middleauth+https://minnie.microns-daf.com/skeletoncache/api/v1/minnie65_phase3_v1/precomputed/skeleton",
+        # view_kws={"visible": False},
+    )
+    seg_layers.append(seg)
 
 
-def bounds_to_pyvista(bounds: np.ndarray) -> list:
-    assert bounds.shape == (2, 3)
-    return [
-        bounds[0, 0],
-        bounds[1, 0],
-        bounds[0, 1],
-        bounds[1, 1],
-        bounds[0, 2],
-        bounds[1, 2],
+box_map = statebuilder.BoundingBoxMapper(
+    point_column_a="point_column_a", point_column_b="point_column_b"
+)
+ann = statebuilder.AnnotationLayerConfig(
+    name="box", mapping_rules=box_map, data_resolution=[1, 1, 1]
+)
+box_df = pd.DataFrame(
+    [
+        {
+            "point_column_a": [box_info["x_min"], box_info["y_min"], box_info["z_min"]],
+            "point_column_b": [box_info["x_max"], box_info["y_max"], box_info["z_max"]],
+        }
     ]
-
-
-bbox_pyvista = bounds_to_pyvista(bounds_nm)
-
-bbox_mesh = pv.Box(bounds=bbox_pyvista)
-
-
-vessel_mesh = cv.mesh.get(
-    vessel_id,
-    bounding_box=bounding_box,
-    deduplicate_chunk_boundaries=False,
-    remove_duplicate_vertices=False,
-    allow_missing=True,
-)
-if vessel_id not in vessel_mesh:
-    pass
-else:
-    vessel_mesh_poly = to_mesh_polydata(vessel_mesh.vertices, vessel_mesh.faces)
-
-    plotter = pv.Plotter()
-
-    plotter.add_mesh(vessel_mesh_poly.extract_largest(), color="red")
-    plotter.add_mesh(bbox_mesh, color="black", style="wireframe")
-
-    plotter.show()
-
-
-# %%
-
-meshes = cv.mesh.get(
-    sample_roots,
-    bounding_box=bounding_box,
-    deduplicate_chunk_boundaries=False,
-    remove_duplicate_vertices=False,
-    allow_missing=False,
-)
-# %%
-
-
-# available_ids = features.index.get_level_values("current_id").unique()
-available_ids = list(meshes.keys())
-
-plotter = pv.Plotter()
-
-colors = sns.color_palette("tab10")
-palette = dict(zip(model.classes_, colors))
-
-for current_id in available_ids:
-    sub_predictions = predictions.loc[current_id].reset_index()
-
-    plurality_label = sub_predictions["pred_label"].mode().values[0]
-
-    mesh = meshes[current_id]
-
-    mesh_poly = to_mesh_polydata(mesh.vertices, mesh.faces)
-
-    plotter.add_mesh(mesh_poly, color=palette[plurality_label], smooth_shading=True)
-
-if vessel_id in vessel_mesh:
-    plotter.add_mesh(vessel_mesh_poly, color="red", smooth_shading=True)
-
-plotter.add_mesh(
-    bbox_mesh, color="black", style="wireframe", smooth_shading=True, line_width=3
 )
 
-plotter.show()
+
+sb = statebuilder.StateBuilder(
+    layers=[img] + seg_layers + [ann],
+    target_site="mainline",
+    # view_kws={"zoom_3d": 0.001, "zoom_image": 0.0000001},
+    client=client,
+)
+
+state_dict = sb.render_state(data=box_df, return_as="dict")
+
+for layer in state_dict["layers"]:
+    if layer["type"] == "segmentation":
+        layer["visible"] = False
+
+state_dict["layout"] = "3d"
+
+sb = statebuilder.StateBuilder(
+    base_state=state_dict,
+    target_site="mainline",
+    client=client,
+)
+sb.render_state(return_as="html")
 
 # %%
