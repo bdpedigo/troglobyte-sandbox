@@ -12,65 +12,96 @@ from sklearn.neighbors import NearestNeighbors
 from minniemorpho.models import load_model
 from minniemorpho.query import Level2Query, SegCLRQuery
 
-out_path = "gs://allen-minnie-phase3/vasculature_feature_pulls/segclr/2024-08-19"
-cf = CloudFiles(out_path)
-
-# %%
-
 client = CAVEclient("minnie65_public", version=1078)
 
-# %%
-df = pd.read_csv(
-    "troglobyte-sandbox/data/blood_vessels/segments_per_branch_2024-08-19.csv"
-)
-target_df = df.set_index("IDs")
-target_df.index.name = "root_id"
-target_df.groupby(["BranchX", "BranchY", "BranchZ"]).size().sort_values()
+
+def write_dataframe(df, cf, path):
+    with BytesIO() as f:
+        df.to_csv(f, index=True)
+        cf.put(path, f)
+
+
+def load_dataframe(cf, path, **kwargs):
+    bytes_out = cf.get(path)
+    with BytesIO(bytes_out) as f:
+        df = pd.read_csv(f, **kwargs)
+    return df
+
 
 # %%
-box_params = target_df.groupby(["BranchX", "BranchY", "BranchZ"])[
-    [
-        "NearestBranchX",
-        "NearestBranchY",
-        "NearestBranchZ",
-        "PointA_X",
-        "PointA_Y",
-        "PointA_Z",
-        "PointB_X",
-        "PointB_Y",
-        "PointB_Z",
-        "mip_res_X",
-        "mip_res_Y",
-        "mip_res_Z",
-        "BranchTypeName",
-    ]
-].first()
-box_params = box_params.sort_values(["BranchX", "BranchY", "BranchZ"])
-box_params["box_id"] = np.arange(len(box_params))
 
-box_params["NearestBranchX"] = box_params["NearestBranchX"].astype(int)
-box_params["NearestBranchY"] = box_params["NearestBranchY"].astype(int)
-box_params["NearestBranchZ"] = box_params["NearestBranchZ"].astype(int)
 
-box_params = box_params.reset_index().set_index("box_id")
+def read_targets():
+    df = pd.read_csv(
+        "troglobyte-sandbox/data/blood_vessels/segments_per_branch_2024-08-19.csv"
+    )
+    # target_cf = CloudFiles(
+    #     "gs://allen-minnie-phase3/vasculature_feature_pulls/segments_per_branch/"
+    # )
+    # out_bytes = target_cf.get("segments_per_branch_2024-08-19.csv", progress=True)
+    # df = pd.read_csv(BytesIO(out_bytes))
+    target_df = df.set_index("IDs")
+    target_df.index.name = "root_id"
+    target_df.groupby(["BranchX", "BranchY", "BranchZ"]).size().sort_values()
 
-box_params
+    box_params = target_df.groupby(["BranchX", "BranchY", "BranchZ"])[
+        [
+            "NearestBranchX",
+            "NearestBranchY",
+            "NearestBranchZ",
+            "PointA_X",
+            "PointA_Y",
+            "PointA_Z",
+            "PointB_X",
+            "PointB_Y",
+            "PointB_Z",
+            "mip_res_X",
+            "mip_res_Y",
+            "mip_res_Z",
+            "BranchTypeName",
+        ]
+    ].first()
+    box_params = box_params.sort_values(["BranchX", "BranchY", "BranchZ"])
+    box_params["box_id"] = np.arange(len(box_params))
+
+    box_params["NearestBranchX"] = box_params["NearestBranchX"].astype(int)
+    box_params["NearestBranchY"] = box_params["NearestBranchY"].astype(int)
+    box_params["NearestBranchZ"] = box_params["NearestBranchZ"].astype(int)
+
+    box_params = box_params.reset_index().set_index("box_id")
+
+    target_df["box_id"] = target_df["BranchTypeName"].map(
+        box_params.reset_index().set_index("BranchTypeName")["box_id"]
+    )
+    box_params["x_min"] = box_params["PointA_X"] * box_params["mip_res_X"]
+    box_params["y_min"] = box_params["PointA_Y"] * box_params["mip_res_Y"]
+    box_params["z_min"] = box_params["PointA_Z"] * box_params["mip_res_Z"]
+    box_params["x_max"] = box_params["PointB_X"] * box_params["mip_res_X"]
+    box_params["y_max"] = box_params["PointB_Y"] * box_params["mip_res_Y"]
+    box_params["z_max"] = box_params["PointB_Z"] * box_params["mip_res_Z"]
+    box_params["volume"] = (
+        (box_params["x_max"] - box_params["x_min"])
+        * (box_params["y_max"] - box_params["y_min"])
+        * (box_params["z_max"] - box_params["z_min"])
+    )
+
+    return target_df, box_params
+
+
+target_df, box_params = read_targets()
 
 # %%
-target_df["box_id"] = target_df["BranchTypeName"].map(
-    box_params.reset_index().set_index("BranchTypeName")["box_id"]
-)
-box_params["x_min"] = box_params["PointA_X"] * box_params["mip_res_X"]
-box_params["y_min"] = box_params["PointA_Y"] * box_params["mip_res_Y"]
-box_params["z_min"] = box_params["PointA_Z"] * box_params["mip_res_Z"]
-box_params["x_max"] = box_params["PointB_X"] * box_params["mip_res_X"]
-box_params["y_max"] = box_params["PointB_Y"] * box_params["mip_res_Y"]
-box_params["z_max"] = box_params["PointB_Z"] * box_params["mip_res_Z"]
-box_params["volume"] = (
-    (box_params["x_max"] - box_params["x_min"])
-    * (box_params["y_max"] - box_params["y_min"])
-    * (box_params["z_max"] - box_params["z_min"])
-)
+targets = target_df["box_id"].to_frame()
+
+cf = CloudFiles("gs://allen-minnie-phase3/vasculature_feature_pulls/box_info/")
+
+write_dataframe(targets, cf, "targets_2024-08-19.csv.gz")
+
+targets = load_dataframe(cf, "targets_2024-08-19.csv.gz", index_col=0)
+
+write_dataframe(box_params, cf, "box_params_2024-08-19.csv.gz")
+
+box_params = load_dataframe(cf, "box_params_2024-08-19.csv.gz", index_col=0)
 
 # %%
 
@@ -90,20 +121,10 @@ def map_to_closest(source_X, target_X):
     return mapping_df
 
 
-def write_dataframe(df, path):
-    with BytesIO() as f:
-        df.to_csv(f, index=True)
-        cf.put(path, f)
+# %%
 
-
-def load_dataframe(path, **kwargs):
-    bytes_out = cf.get(path)
-    with BytesIO(bytes_out) as f:
-        df = pd.read_csv(f, **kwargs)
-    return df
-
-
-# out_path = Path("troglobyte-sandbox/data/blood_vessels/segclr/2024-08-19")
+out_path = "gs://allen-minnie-phase3/vasculature_feature_pulls/segclr/2024-08-19"
+cf = CloudFiles(out_path)
 
 seg_res = np.array(client.chunkedgraph.segmentation_info["scales"][0]["resolution"])
 
@@ -111,6 +132,7 @@ model = load_model("segclr_logreg_bdp")
 classes = model.classes_
 
 distance_threshold = 2_000
+
 test = True
 
 for i in range(len(box_params)):
@@ -119,8 +141,8 @@ for i in range(len(box_params)):
     box_name = box_info["BranchTypeName"]
     bounds_min_cg = (box_info[["x_min", "y_min", "z_min"]].values / seg_res).astype(int)
     bounds_max_cg = (box_info[["x_max", "y_max", "z_max"]].values / seg_res).astype(int)
-    bounds = np.array([bounds_min_cg, bounds_max_cg])
-    bounds_nm = bounds * seg_res
+    bounds_cg = np.array([bounds_min_cg, bounds_max_cg])
+    bounds_nm = bounds_cg * seg_res
 
     sub_target_df = target_df[target_df["box_id"] == i]
     query_ids = sub_target_df.index
@@ -210,9 +232,9 @@ for i in range(len(box_params)):
     level2_features["n_segclr_pts"] = filtered_segclr_features.groupby(
         ["root_id", "level2_id"]
     ).size()
-    level2_predictions = filtered_predictions.groupby(filtered_segclr_features["level2_id"])[
-        filtered_predictions.columns.drop("pred_label")
-    ].mean()
+    level2_predictions = filtered_predictions.groupby(
+        filtered_segclr_features["level2_id"]
+    )[filtered_predictions.columns.drop("pred_label")].mean()
     level2_predictions["pred_label"] = (
         level2_predictions[[f"{cl}_posterior" for cl in model.classes_]]
         .idxmax(axis=1)
@@ -240,7 +262,7 @@ for i in range(len(box_params)):
 
 load_dataframe(f"{box_name}_segclr_features.csv.gz", index_col=[0, 1, 2, 3, 4])
 
-#%%
+# %%
 load_dataframe(f"{box_name}_level2_features.csv.gz", index_col=[0, 1])
 
 # %%
